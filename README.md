@@ -27,45 +27,120 @@ kappal down                     # Stop services (like docker compose down)
 - **Network Isolation** - Define networks to isolate service groups
 - **UDP Support** - Full protocol support including UDP ports
 
-## Quick Start
+## Prerequisites
 
-```bash
-# Build kappal
-make docker-build
+**Only Docker is required.** Kappal handles everything else automatically.
 
-# Run with your existing docker-compose.yaml
-kappal up -d
+| Requirement | Notes |
+|-------------|-------|
+| Docker | Only prerequisite - [Install Docker](https://docs.docker.com/get-docker/) |
+| ~~Kubernetes~~ | Not needed - Kappal runs K3s automatically |
+| ~~kubectl~~ | Not needed - included in Kappal image |
+| ~~K3s~~ | Not needed - runs as a container |
 
-# Check status
-kappal ps
-
-# View logs
-kappal logs
-
-# Stop everything
-kappal down
-```
+When you run Kappal, it automatically:
+- Pulls and starts K3s (lightweight Kubernetes)
+- Builds your application images
+- Loads images into K3s
+- Deploys your services
 
 ## Installation
 
-### Using Docker (recommended)
+### Fresh laptop setup
 
 ```bash
-docker build -f Dockerfile.build -t kappal:latest .
+# 1. Install Docker (if not already installed)
+curl -fsSL https://get.docker.com | sh
 
-# Run kappal via Docker
+# 2. Pull kappal image
+docker pull kappal/kappal:latest
+```
+
+That's it. You're ready to use Kappal.
+
+## Quick Start
+
+```bash
+# Navigate to your project with docker-compose.yaml
+cd /path/to/your/project
+
+# Start services
 docker run --rm \
   -v /var/run/docker.sock:/var/run/docker.sock \
   -v "$(pwd):/project" \
   -w /project \
   --network host \
-  kappal:latest up -d
+  kappal/kappal:latest up -d
+
+# Check status
+docker run --rm \
+  -v /var/run/docker.sock:/var/run/docker.sock \
+  -v "$(pwd):/project" \
+  -w /project \
+  --network host \
+  kappal/kappal:latest ps
+
+# View logs
+docker run --rm \
+  -v /var/run/docker.sock:/var/run/docker.sock \
+  -v "$(pwd):/project" \
+  -w /project \
+  --network host \
+  kappal/kappal:latest logs
+
+# Stop everything
+docker run --rm \
+  -v /var/run/docker.sock:/var/run/docker.sock \
+  -v "$(pwd):/project" \
+  -w /project \
+  --network host \
+  kappal/kappal:latest down
 ```
 
-### From Source
+### Recommended: Create an alias
+
+Add to your `~/.bashrc` or `~/.zshrc`:
 
 ```bash
-# Requires Go 1.22+
+alias kappal='docker run --rm -v /var/run/docker.sock:/var/run/docker.sock -v "$(pwd):/project" -w /project --network host kappal/kappal:latest'
+```
+
+Then use it like Docker Compose:
+
+```bash
+kappal up -d
+kappal ps
+kappal logs api
+kappal exec web sh
+kappal down
+```
+
+### Monorepo / Custom build contexts
+
+If your `docker-compose.yml` references parent directories (e.g., `build: context: ../..`), mount from the project root:
+
+```bash
+cd /path/to/project/root
+
+docker run --rm \
+  -v /var/run/docker.sock:/var/run/docker.sock \
+  -v "$(pwd):/project" \
+  -w /project/path/to/compose/dir \
+  --network host \
+  kappal/kappal:latest up --build -f docker-compose.yml
+```
+
+### Building from source
+
+```bash
+# Clone the repo
+git clone https://github.com/kappal-app/kappal.git
+cd kappal
+
+# Build Docker image
+make docker-build
+
+# Or build binary (requires Go 1.22+)
 go build -o kappal ./cmd/kappal
 ```
 
