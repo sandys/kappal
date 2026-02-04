@@ -1,0 +1,102 @@
+package tanka
+
+import (
+	"context"
+	"fmt"
+	"os"
+	"os/exec"
+	"path/filepath"
+
+	"github.com/kappal-app/kappal/pkg/workspace"
+)
+
+// ApplyOpts configures the apply operation
+type ApplyOpts struct {
+	AutoApprove bool
+	DryRun      bool
+}
+
+// DeleteOpts configures the delete operation
+type DeleteOpts struct {
+	AutoApprove bool
+}
+
+// DiffOpts configures the diff operation
+type DiffOpts struct {
+}
+
+// Apply applies the workspace manifests using Tanka
+// Note: For now, we use kubectl apply as Tanka library requires complex setup.
+// This will be replaced with tanka.Apply() once we integrate the full Tanka library.
+func Apply(ctx context.Context, ws *workspace.Workspace, kubeconfigPath string, opts ApplyOpts) error {
+	manifestPath := filepath.Join(ws.GetManifestDir(), "all.yaml")
+
+	// Check if manifest exists
+	if _, err := os.Stat(manifestPath); os.IsNotExist(err) {
+		return fmt.Errorf("manifest not found: %s", manifestPath)
+	}
+
+	args := []string{
+		"--kubeconfig", kubeconfigPath,
+		"apply", "-f", manifestPath,
+	}
+
+	if opts.DryRun {
+		args = append(args, "--dry-run=client")
+	}
+
+	cmd := exec.CommandContext(ctx, "kubectl", args...)
+	cmd.Stdout = os.Stdout
+	cmd.Stderr = os.Stderr
+
+	return cmd.Run()
+}
+
+// Delete deletes resources in the namespace
+func Delete(ctx context.Context, namespace, kubeconfigPath string, opts DeleteOpts) error {
+	args := []string{
+		"--kubeconfig", kubeconfigPath,
+		"delete", "namespace", namespace,
+		"--ignore-not-found",
+	}
+
+	cmd := exec.CommandContext(ctx, "kubectl", args...)
+	cmd.Stdout = os.Stdout
+	cmd.Stderr = os.Stderr
+
+	return cmd.Run()
+}
+
+// Diff shows the diff between current and desired state
+func Diff(ctx context.Context, ws *workspace.Workspace, kubeconfigPath string, opts DiffOpts) (string, error) {
+	manifestPath := filepath.Join(ws.GetManifestDir(), "all.yaml")
+
+	// Check if manifest exists
+	if _, err := os.Stat(manifestPath); os.IsNotExist(err) {
+		return "", fmt.Errorf("manifest not found: %s", manifestPath)
+	}
+
+	args := []string{
+		"--kubeconfig", kubeconfigPath,
+		"diff", "-f", manifestPath,
+	}
+
+	cmd := exec.CommandContext(ctx, "kubectl", args...)
+	output, err := cmd.CombinedOutput()
+
+	// kubectl diff returns exit code 1 if there are differences
+	if err != nil {
+		if exitErr, ok := err.(*exec.ExitError); ok && exitErr.ExitCode() == 1 {
+			return string(output), nil
+		}
+		return "", fmt.Errorf("diff failed: %w", err)
+	}
+
+	return string(output), nil
+}
+
+// Show renders the manifests without applying
+func Show(ctx context.Context, ws *workspace.Workspace) ([]byte, error) {
+	manifestPath := filepath.Join(ws.GetManifestDir(), "all.yaml")
+	return os.ReadFile(manifestPath)
+}

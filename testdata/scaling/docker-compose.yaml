@@ -1,0 +1,7 @@
+services:
+  app:
+    image: nginx:alpine
+    deploy:
+      replicas: 3
+    ports:
+      - "8080:80"

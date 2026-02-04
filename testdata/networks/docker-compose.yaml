@@ -1,0 +1,14 @@
+services:
+  frontend:
+    image: nginx:alpine
+    networks:
+      - frontend-net
+
+  backend:
+    image: nginx:alpine
+    networks:
+      - backend-net
+
+networks:
+  frontend-net:
+  backend-net:

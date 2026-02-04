@@ -1,0 +1,7 @@
+# Kappal runtime data
+runtime/
+*.log
+
+# Keep environments and lib
+!environments/
+!lib/

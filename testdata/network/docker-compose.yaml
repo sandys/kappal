@@ -1,0 +1,10 @@
+services:
+  frontend:
+    image: busybox:latest
+    command: ["sh", "-c", "while true; do sleep 3600; done"]
+
+  backend:
+    image: busybox:latest
+    command: ["sh", "-c", "while true; do echo -e 'HTTP/1.1 200 OK\n\nOK' | nc -l -p 8080; done"]
+    ports:
+      - "8080:8080"

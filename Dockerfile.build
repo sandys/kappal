@@ -1,0 +1,28 @@
+# Build environment for Kappal
+FROM golang:1.22-bookworm
+
+# Install development tools
+RUN apt-get update && apt-get install -y \
+    git \
+    make \
+    curl \
+    jq \
+    && rm -rf /var/lib/apt/lists/*
+
+# Install jsonnet for testing
+RUN curl -fsSL https://github.com/google/go-jsonnet/releases/download/v0.20.0/go-jsonnet_0.20.0_Linux_x86_64.tar.gz | \
+    tar -xz -C /usr/local/bin jsonnet jsonnetfmt
+
+WORKDIR /workspace
+
+# Cache dependencies
+COPY go.mod go.sum* ./
+RUN go mod download || true
+
+# Copy source
+COPY . .
+
+# Download dependencies and build
+RUN go mod tidy && go build -o /usr/local/bin/kappal ./cmd/kappal
+
+CMD ["kappal"]

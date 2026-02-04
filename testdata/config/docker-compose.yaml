@@ -1,0 +1,11 @@
+services:
+  app:
+    image: busybox:latest
+    command: ["sh", "-c", "while true; do sleep 3600; done"]
+    configs:
+      - source: app_config
+        target: /etc/app/config.json
+
+configs:
+  app_config:
+    file: ./config.json
