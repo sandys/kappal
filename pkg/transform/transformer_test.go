@@ -98,3 +98,69 @@ func TestSecretMountPathNotDuplicated(t *testing.T) {
 		}
 	}
 }
+
+func TestCommandVsArgsMapping(t *testing.T) {
+	// Test that compose command maps to K8s args (not command)
+	// and compose entrypoint maps to K8s command
+	// This is critical for containers like postgres that rely on their entrypoint
+
+	t.Run("command_only_generates_args", func(t *testing.T) {
+		svc := ServiceSpec{
+			Image:   "postgres:16",
+			Command: []string{"postgres", "-c", "shared_preload_libraries=pg_cron"},
+		}
+
+		transformer := &Transformer{workingDir: "/tmp"}
+		deployment := transformer.generateDeployment("test", "postgres", svc)
+
+		// Should have args, not command (to preserve entrypoint)
+		if strings.Contains(deployment, "        command:") {
+			t.Error("compose command should generate K8s args, not command (to preserve ENTRYPOINT)")
+		}
+		if !strings.Contains(deployment, "        args:") {
+			t.Error("compose command should generate K8s args")
+		}
+		if !strings.Contains(deployment, `"postgres"`) {
+			t.Error("args should contain the command values")
+		}
+	})
+
+	t.Run("entrypoint_generates_command", func(t *testing.T) {
+		svc := ServiceSpec{
+			Image:      "myapp:latest",
+			Entrypoint: []string{"/custom-entrypoint.sh"},
+			Command:    []string{"--flag", "value"},
+		}
+
+		transformer := &Transformer{workingDir: "/tmp"}
+		deployment := transformer.generateDeployment("test", "myapp", svc)
+
+		// Should have both command (from entrypoint) and args (from command)
+		if !strings.Contains(deployment, "        command:") {
+			t.Error("compose entrypoint should generate K8s command")
+		}
+		if !strings.Contains(deployment, `"/custom-entrypoint.sh"`) {
+			t.Error("command should contain entrypoint values")
+		}
+		if !strings.Contains(deployment, "        args:") {
+			t.Error("compose command should generate K8s args")
+		}
+	})
+
+	t.Run("neither_command_nor_entrypoint", func(t *testing.T) {
+		svc := ServiceSpec{
+			Image: "nginx:latest",
+		}
+
+		transformer := &Transformer{workingDir: "/tmp"}
+		deployment := transformer.generateDeployment("test", "nginx", svc)
+
+		// Should have neither command nor args
+		if strings.Contains(deployment, "        command:") {
+			t.Error("should not have command when entrypoint not specified")
+		}
+		if strings.Contains(deployment, "        args:") {
+			t.Error("should not have args when command not specified")
+		}
+	})
+}

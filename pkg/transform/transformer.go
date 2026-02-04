@@ -142,6 +142,16 @@ func (t *Transformer) ToSpec() *ComposeSpec {
 		Configs:  make(map[string]ConfigSpec),
 	}
 
+	// First pass: collect image->built_image mappings for services with build contexts
+	// This handles the pattern where multiple services share the same image but only one has a build
+	imageToBuilt := make(map[string]string)
+	for _, svc := range t.project.Services {
+		if svc.Build != nil && svc.Image != "" {
+			builtName := fmt.Sprintf("%s-%s:latest", t.project.Name, svc.Name)
+			imageToBuilt[svc.Image] = builtName
+		}
+	}
+
 	// Convert services
 	for _, svc := range t.project.Services {
 		svcSpec := ServiceSpec{
@@ -157,10 +167,13 @@ func (t *Transformer) ToSpec() *ComposeSpec {
 				Context:    svc.Build.Context,
 				Dockerfile: svc.Build.Dockerfile,
 			}
-			// If no image specified, generate one
-			if svcSpec.Image == "" {
-				svcSpec.Image = fmt.Sprintf("%s-%s:latest", t.project.Name, svc.Name)
-			}
+			// Always use generated image name when building locally
+			// The compose 'image:' field is for registry pulls, not local builds
+			svcSpec.Image = fmt.Sprintf("%s-%s:latest", t.project.Name, svc.Name)
+		} else if builtImage, ok := imageToBuilt[svc.Image]; ok {
+			// Service uses an image that another service builds locally
+			// Use the locally built image name
+			svcSpec.Image = builtImage
 		}
 
 		// Ports
@@ -453,6 +466,7 @@ data:
 
 	// Generate PVCs for named volumes
 	for name := range spec.Volumes {
+		k8sName := sanitizeName(name)
 		pvcManifest := fmt.Sprintf(`---
 apiVersion: v1
 kind: PersistentVolumeClaim
@@ -461,6 +475,7 @@ metadata:
   namespace: %s
   labels:
     kappal.io/project: "%s"
+    kappal.io/volume: "%s"
 spec:
   accessModes:
     - ReadWriteOnce
@@ -468,7 +483,7 @@ spec:
     requests:
       storage: 1Gi
   storageClassName: local-path
-`, name, spec.Name, spec.Name)
+`, k8sName, spec.Name, spec.Name, name)
 		manifests = append(manifests, pvcManifest)
 	}
 
@@ -477,6 +492,7 @@ spec:
 		if name == "default" {
 			continue
 		}
+		k8sName := sanitizeName(name)
 		npManifest := fmt.Sprintf(`---
 apiVersion: networking.k8s.io/v1
 kind: NetworkPolicy
@@ -485,6 +501,7 @@ metadata:
   namespace: %s
   labels:
     kappal.io/project: "%s"
+    kappal.io/network: "%s"
 spec:
   podSelector:
     matchLabels:
@@ -496,16 +513,16 @@ spec:
         - podSelector:
             matchLabels:
               kappal.io/network: "%s"
-`, name, spec.Name, spec.Name, name, name)
+`, k8sName, spec.Name, spec.Name, name, name, name)
 		manifests = append(manifests, npManifest)
 	}
 
 	// Generate Deployments and Services for each service
+	// Services are created for ALL deployments to enable DNS resolution,
+	// not just those with published ports
 	for name, svc := range spec.Services {
 		manifests = append(manifests, t.generateDeployment(spec.Name, name, svc))
-		if len(svc.Ports) > 0 {
-			manifests = append(manifests, t.generateService(spec.Name, name, svc))
-		}
+		manifests = append(manifests, t.generateService(spec.Name, name, svc))
 	}
 
 	// Write combined manifest
@@ -552,13 +569,22 @@ func (t *Transformer) generateDeployment(projectName, serviceName string, svc Se
 		containerParts = append(containerParts, "        env:\n"+strings.Join(envLines, "\n"))
 	}
 
-	// Command
-	if len(svc.Command) > 0 {
+	// Entrypoint -> K8s command (replaces ENTRYPOINT)
+	if len(svc.Entrypoint) > 0 {
 		var cmdLines []string
-		for _, c := range svc.Command {
+		for _, c := range svc.Entrypoint {
 			cmdLines = append(cmdLines, fmt.Sprintf("        - \"%s\"", escapeYAML(c)))
 		}
 		containerParts = append(containerParts, "        command:\n"+strings.Join(cmdLines, "\n"))
+	}
+
+	// Command -> K8s args (replaces CMD, passed to entrypoint)
+	if len(svc.Command) > 0 {
+		var argLines []string
+		for _, c := range svc.Command {
+			argLines = append(argLines, fmt.Sprintf("        - \"%s\"", escapeYAML(c)))
+		}
+		containerParts = append(containerParts, "        args:\n"+strings.Join(argLines, "\n"))
 	}
 
 	// Volume mounts and volumes
@@ -575,7 +601,9 @@ func (t *Transformer) generateDeployment(projectName, serviceName string, svc Se
 		volumeMountLines = append(volumeMountLines, mountLine)
 
 		if v.Type == "volume" || v.Type == "" {
-			volumeLines = append(volumeLines, fmt.Sprintf("      - name: %s\n        persistentVolumeClaim:\n          claimName: %s", volName, v.Source))
+			// Sanitize volume name for PVC reference
+			pvcName := sanitizeName(v.Source)
+			volumeLines = append(volumeLines, fmt.Sprintf("      - name: %s\n        persistentVolumeClaim:\n          claimName: %s", volName, pvcName))
 		} else if v.Type == "bind" {
 			volumeLines = append(volumeLines, fmt.Sprintf("      - name: %s\n        hostPath:\n          path: \"%s\"", volName, v.Source))
 		}
@@ -626,6 +654,18 @@ func (t *Transformer) generateDeployment(projectName, serviceName string, svc Se
 		volumeSpec = "\n      volumes:\n" + strings.Join(volumeLines, "\n")
 	}
 
+	// Add security context for pods with persistent volumes
+	// Note: We do NOT add initContainers or special handling for postgres because
+	// the postgres entrypoint handles privilege dropping correctly when we preserve
+	// the original entrypoint (by mapping compose command -> k8s args, not command)
+	securityContextSpec := ""
+	initContainerSpec := ""
+	containerSecurityContext := ""
+	if len(svc.Volumes) > 0 {
+		// Use fsGroup to allow container user to write to volumes
+		securityContextSpec = "\n      securityContext:\n        fsGroup: 999"
+	}
+
 	return fmt.Sprintf(`---
 apiVersion: apps/v1
 kind: Deployment
@@ -645,30 +685,86 @@ spec:
     metadata:
       labels:
 %s
-    spec:
+    spec:%s%s
       containers:
       - name: %s
         image: %s
-        imagePullPolicy: IfNotPresent%s%s`, serviceName, projectName, projectName, serviceName, replicas,
-		projectName, serviceName, labels,
-		serviceName, svc.Image, containerSpec, volumeSpec)
+        imagePullPolicy: IfNotPresent%s%s%s`, serviceName, projectName, projectName, serviceName, replicas,
+		projectName, serviceName, labels, securityContextSpec, initContainerSpec,
+		serviceName, svc.Image, containerSecurityContext, containerSpec, volumeSpec)
+}
+
+// getDefaultPort returns the default port for well-known images
+func getDefaultPort(image string) uint32 {
+	imageLower := strings.ToLower(image)
+	// Check for common database and service images
+	switch {
+	case strings.Contains(imageLower, "postgres"):
+		return 5432
+	case strings.Contains(imageLower, "mysql"), strings.Contains(imageLower, "mariadb"):
+		return 3306
+	case strings.Contains(imageLower, "redis"):
+		return 6379
+	case strings.Contains(imageLower, "mongo"):
+		return 27017
+	case strings.Contains(imageLower, "elasticsearch"):
+		return 9200
+	case strings.Contains(imageLower, "rabbitmq"):
+		return 5672
+	case strings.Contains(imageLower, "memcached"):
+		return 11211
+	case strings.Contains(imageLower, "nginx"):
+		return 80
+	case strings.Contains(imageLower, "httpd"), strings.Contains(imageLower, "apache"):
+		return 80
+	}
+	return 0
 }
 
 func (t *Transformer) generateService(projectName, serviceName string, svc ServiceSpec) string {
-	portItems := make([]string, 0, len(svc.Ports))
-	for i, p := range svc.Ports {
-		protocol := strings.ToUpper(p.Protocol)
-		if protocol == "" {
-			protocol = "TCP"
-		}
-		published := p.Published
-		if published == 0 {
-			published = p.Target
-		}
-		portItems = append(portItems, fmt.Sprintf(`  - name: port-%d
+	var portItems []string
+	hasExternalPorts := len(svc.Ports) > 0
+
+	if hasExternalPorts {
+		// Use explicitly defined ports
+		for i, p := range svc.Ports {
+			protocol := strings.ToUpper(p.Protocol)
+			if protocol == "" {
+				protocol = "TCP"
+			}
+			published := p.Published
+			if published == 0 {
+				published = p.Target
+			}
+			portItems = append(portItems, fmt.Sprintf(`  - name: port-%d
     port: %d
     targetPort: %d
     protocol: %s`, i, published, p.Target, protocol))
+		}
+	} else {
+		// No explicit ports - try to infer from image for internal service discovery
+		defaultPort := getDefaultPort(svc.Image)
+		if defaultPort > 0 {
+			portItems = append(portItems, fmt.Sprintf(`  - name: port-0
+    port: %d
+    targetPort: %d
+    protocol: TCP`, defaultPort, defaultPort))
+		} else {
+			// Can't determine port - use a placeholder port 80
+			// This at least enables DNS resolution
+			portItems = append(portItems, `  - name: port-0
+    port: 80
+    targetPort: 80
+    protocol: TCP`)
+		}
+	}
+
+	// Use LoadBalancer for services with external ports, ClusterIP for internal-only
+	serviceType := "ClusterIP"
+	externalTrafficPolicy := ""
+	if hasExternalPorts {
+		serviceType = "LoadBalancer"
+		externalTrafficPolicy = "\n  externalTrafficPolicy: Local"
 	}
 
 	return fmt.Sprintf(`---
@@ -681,14 +777,13 @@ metadata:
     kappal.io/project: "%s"
     kappal.io/service: "%s"
 spec:
-  type: LoadBalancer
-  externalTrafficPolicy: Local
+  type: %s%s
   selector:
     kappal.io/project: "%s"
     kappal.io/service: "%s"
   ports:
 %s
-`, serviceName, projectName, projectName, serviceName, projectName, serviceName, strings.Join(portItems, "\n"))
+`, serviceName, projectName, projectName, serviceName, serviceType, externalTrafficPolicy, projectName, serviceName, strings.Join(portItems, "\n"))
 }
 
 func escapeYAML(s string) string {

@@ -85,15 +85,15 @@ func (m *Manager) start(ctx context.Context) error {
 		return fmt.Errorf("failed to create runtime directory: %w", err)
 	}
 
-	// Start K3s in Docker
+	// Start K3s in Docker with host networking
+	// Host networking is required so K3s ServiceLB can bind directly to host ports
+	// for any services the user defines in their compose file
 	args := []string{
 		"run", "-d",
 		"--name", ContainerName,
 		"--privileged",
 		"--restart", "unless-stopped",
-		"-p", "6443:6443",
-		"-p", "80:80",
-		"-p", "443:443",
+		"--network", "host",
 		"-e", "K3S_KUBECONFIG_MODE=644",
 		K3sImage,
 		"server",
@@ -164,13 +164,21 @@ func (m *Manager) Remove(ctx context.Context) error {
 }
 
 // BuildImage builds an image and loads it into K3s containerd
-func (m *Manager) BuildImage(ctx context.Context, projectName, serviceName, contextDir string) error {
+// dockerfile is the path to the Dockerfile relative to contextDir (empty string for default "Dockerfile")
+func (m *Manager) BuildImage(ctx context.Context, projectName, serviceName, contextDir, dockerfile string) error {
 	imageName := fmt.Sprintf("%s-%s:latest", projectName, serviceName)
 
 	// Build with docker
 	fmt.Printf("Building image %s from %s\n", imageName, contextDir)
 
-	buildCmd := exec.CommandContext(ctx, "docker", "build", "-t", imageName, contextDir)
+	args := []string{"build", "-t", imageName}
+	if dockerfile != "" {
+		// Dockerfile path is relative to context
+		args = append(args, "-f", filepath.Join(contextDir, dockerfile))
+	}
+	args = append(args, contextDir)
+
+	buildCmd := exec.CommandContext(ctx, "docker", args...)
 	buildCmd.Stdout = os.Stdout
 	buildCmd.Stderr = os.Stderr
 	if err := buildCmd.Run(); err != nil {

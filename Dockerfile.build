@@ -1,17 +1,30 @@
 # Build environment for Kappal
 FROM golang:1.22-bookworm
 
-# Install development tools
+# Install development tools and Docker CLI
 RUN apt-get update && apt-get install -y \
     git \
     make \
     curl \
     jq \
+    ca-certificates \
+    gnupg \
+    && install -m 0755 -d /etc/apt/keyrings \
+    && curl -fsSL https://download.docker.com/linux/debian/gpg | gpg --dearmor -o /etc/apt/keyrings/docker.gpg \
+    && chmod a+r /etc/apt/keyrings/docker.gpg \
+    && echo "deb [arch=$(dpkg --print-architecture) signed-by=/etc/apt/keyrings/docker.gpg] https://download.docker.com/linux/debian bookworm stable" > /etc/apt/sources.list.d/docker.list \
+    && apt-get update \
+    && apt-get install -y docker-ce-cli \
     && rm -rf /var/lib/apt/lists/*
 
 # Install jsonnet for testing
 RUN curl -fsSL https://github.com/google/go-jsonnet/releases/download/v0.20.0/go-jsonnet_0.20.0_Linux_x86_64.tar.gz | \
     tar -xz -C /usr/local/bin jsonnet jsonnetfmt
+
+# Install kubectl for applying manifests
+RUN curl -LO "https://dl.k8s.io/release/v1.29.0/bin/linux/amd64/kubectl" \
+    && chmod +x kubectl \
+    && mv kubectl /usr/local/bin/
 
 WORKDIR /workspace
 
@@ -25,4 +38,4 @@ COPY . .
 # Download dependencies and build
 RUN go mod tidy && go build -o /usr/local/bin/kappal ./cmd/kappal
 
-CMD ["kappal"]
+ENTRYPOINT ["kappal"]

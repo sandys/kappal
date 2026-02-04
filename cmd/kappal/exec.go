@@ -41,6 +41,9 @@ func init() {
 	execCmd.Flags().BoolVarP(&execTTY, "tty", "t", false, "Allocate a pseudo-TTY")
 	execCmd.Flags().BoolVarP(&execDetach, "detach", "d", false, "Detached mode: run command in background")
 	execCmd.Flags().IntVar(&execIndex, "index", 0, "Index of the container if service has multiple replicas")
+	// Disable interspersed flags so flags after SERVICE are passed to the command
+	// This allows: kappal exec app sh -c 'echo hello' (without needing --)
+	execCmd.Flags().SetInterspersed(false)
 }
 
 func runExec(cmd *cobra.Command, args []string) error {
