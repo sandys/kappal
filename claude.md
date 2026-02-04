@@ -34,7 +34,30 @@
 2. **Don't hardcode paths** - Use filepath.Join and handle absolute/relative paths
 3. **Don't duplicate path prefixes** - Check if prefix exists before adding
 4. **Don't create empty K8s resources** - Always populate data fields
-5. **Don't use `docker exec kubectl`** - Use client-go for all K8s operations (except verification in tests)
+
+## CRITICAL: User Experience Must Mirror Docker Compose
+
+**Kappal hides Kubernetes completely from users.** Users should NEVER see or use kubectl.
+
+### When Testing/Verifying Kappal:
+```bash
+# CORRECT - Use kappal CLI (mirrors docker compose)
+kappal ps                                    # like: docker compose ps
+kappal logs worker                           # like: docker compose logs worker
+kappal exec frontend wget -O - http://api    # like: docker compose exec frontend wget -O - http://api
+kappal up -d                                 # like: docker compose up -d
+kappal down                                  # like: docker compose down
+
+# WRONG - Never use kubectl for testing user workflows
+docker exec kappal-k3s kubectl get pods      # NO! Use: kappal ps
+docker exec kappal-k3s kubectl logs ...      # NO! Use: kappal logs
+docker exec kappal-k3s kubectl exec ...      # NO! Use: kappal exec
+```
+
+### Internal Implementation:
+- Kappal's Go code CAN use client-go or kubectl internally - that's fine
+- The key is that USERS never see Kubernetes concepts
+- All user-facing commands must mirror Docker Compose syntax
 
 ## Lint Checks Required
 

@@ -5,6 +5,6 @@ services:
 
   backend:
     image: busybox:latest
-    command: ["sh", "-c", "while true; do echo -e 'HTTP/1.1 200 OK\n\nOK' | nc -l -p 8080; done"]
+    command: ["sh", "-c", "while true; do printf 'HTTP/1.1 200 OK\r\n\r\nOK' | nc -l -p 8080; done"]
     ports:
       - "8080:8080"

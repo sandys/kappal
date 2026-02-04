@@ -1,0 +1,24 @@
+# Binaries
+kappal
+*.exe
+
+# Runtime directories
+.kappal/
+
+# IDE
+.idea/
+.vscode/
+*.swp
+*.swo
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Test artifacts
+*.test
+coverage.out
+
+# Temporary files
+*.tmp
+*.log

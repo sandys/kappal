@@ -28,6 +28,51 @@ kappal() {
         kappal:latest "$@"
 }
 
+# =============================================================================
+# INTERNAL HELPERS FOR IMPLEMENTATION VALIDATION
+# These functions verify Kubernetes internals. They are NOT user-facing and
+# should NEVER be exposed to users. Users only interact with kappal commands.
+# =============================================================================
+
+# Internal: Get kubeconfig path from workspace
+_internal_kubeconfig() {
+    echo "$PWD/.kappal/runtime/kubeconfig.yaml"
+}
+
+# Internal: Run kubectl command against kappal's K8s cluster
+# This is for INTERNAL testing only - users never see kubectl
+_internal_kubectl() {
+    local kubeconfig=$(_internal_kubeconfig)
+    if [ -f "$kubeconfig" ]; then
+        kubectl --kubeconfig="$kubeconfig" "$@" 2>/dev/null
+    else
+        # Fallback to docker exec if kubeconfig not available locally
+        docker exec kappal-k3s kubectl "$@" 2>/dev/null
+    fi
+}
+
+# Internal: Get ready replica count from a K8s Deployment
+_internal_get_ready_replicas() {
+    local namespace="$1"
+    local deployment="$2"
+    _internal_kubectl get deploy -n "$namespace" "$deployment" -o jsonpath='{.status.readyReplicas}' || echo "0"
+}
+
+# Internal: Get pods for debugging
+_internal_get_pods() {
+    local namespace="$1"
+    _internal_kubectl get pods -n "$namespace"
+}
+
+# Internal: Delete pods by label (to test restart)
+_internal_delete_pods() {
+    local namespace="$1"
+    local label="$2"
+    _internal_kubectl delete pod -n "$namespace" -l "$label"
+}
+
+# =============================================================================
+
 echo "=== Building Kappal ==="
 cd "$PROJECT_DIR"
 docker build -f Dockerfile.build -t kappal:latest .
@@ -66,12 +111,13 @@ cd "$PROJECT_DIR/testdata/scaling"
 kappal up -d
 sleep 15
 
-replicas=$(docker exec kappal-k3s kubectl get deploy -n scaling app -o jsonpath='{.status.readyReplicas}' 2>/dev/null || echo "0")
+# Internal verification: check K8s Deployment has correct ready replicas
+replicas=$(_internal_get_ready_replicas "scaling" "app")
 if [ "$replicas" = "3" ]; then
     echo -e "${GREEN}PASS${NC}: 3 replicas running"
 else
     echo -e "${RED}FAIL${NC}: Expected 3 replicas, got $replicas"
-    docker exec kappal-k3s kubectl get pods -n scaling
+    _internal_get_pods "scaling"
 fi
 
 kappal down -v
@@ -83,15 +129,16 @@ cd "$PROJECT_DIR/testdata/volume"
 kappal up -d
 sleep 10
 
-# Write data
-docker exec kappal-k3s kubectl exec -n volume deploy/app -- sh -c 'echo "persist-test" > /data/test.txt'
+# Write data using kappal exec (mirrors docker compose exec)
+kappal exec app sh -c 'echo "persist-test" > /data/test.txt'
 
-# Restart pod
-docker exec kappal-k3s kubectl delete pod -n volume -l kappal.io/service=app
+# Restart by doing down/up to test persistence
+kappal down
+kappal up -d
 sleep 10
 
-# Check data
-if docker exec kappal-k3s kubectl exec -n volume deploy/app -- cat /data/test.txt 2>/dev/null | grep -q "persist-test"; then
+# Check data using kappal exec
+if kappal exec app cat /data/test.txt 2>/dev/null | grep -q "persist-test"; then
     echo -e "${GREEN}PASS${NC}: Volume data persisted"
 else
     echo -e "${RED}FAIL${NC}: Volume data not persisted"

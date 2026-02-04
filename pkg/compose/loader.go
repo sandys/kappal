@@ -11,30 +11,44 @@ import (
 
 // Load parses a docker-compose.yaml file and returns a Project
 func Load(path string, projectName string) (*types.Project, error) {
-	// Get the directory containing the compose file for context
-	dir := filepath.Dir(path)
-	if dir == "" {
-		dir = "."
+	// Convert compose file path to absolute for reliable loading
+	absPath, err := filepath.Abs(path)
+	if err != nil {
+		return nil, err
 	}
 
-	// Build options
-	opts := []cli.ProjectOptionsFn{
-		cli.WithOsEnv,
-		cli.WithDotEnv,
-		cli.WithWorkingDirectory(dir),
+	// Get the directory containing the compose file
+	absDir := filepath.Dir(absPath)
+
+	// Check if .env file exists in the compose file's directory
+	envFile := filepath.Join(absDir, ".env")
+	var envFiles []string
+	if _, err := os.Stat(envFile); err == nil {
+		envFiles = append(envFiles, envFile)
 	}
+
+	// Build options - working directory and env files must be set before loading
+	// Order matters: set env files first, then WithDotEnv loads them
+	opts := []cli.ProjectOptionsFn{
+		cli.WithWorkingDirectory(absDir),
+		cli.WithOsEnv,
+	}
+
+	// Add env files if .env exists, then WithDotEnv to load them
+	if len(envFiles) > 0 {
+		opts = append(opts, cli.WithEnvFiles(envFiles...))
+	}
+	opts = append(opts, cli.WithDotEnv)
 
 	if projectName != "" {
 		opts = append(opts, cli.WithName(projectName))
 	} else {
 		// Use directory name as project name
-		absDir, err := filepath.Abs(dir)
-		if err == nil {
-			opts = append(opts, cli.WithName(filepath.Base(absDir)))
-		}
+		opts = append(opts, cli.WithName(filepath.Base(absDir)))
 	}
 
-	options, err := cli.NewProjectOptions([]string{path}, opts...)
+	// Pass absolute path to ensure compose-go finds the file correctly
+	options, err := cli.NewProjectOptions([]string{absPath}, opts...)
 	if err != nil {
 		return nil, err
 	}

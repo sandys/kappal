@@ -70,7 +70,11 @@ func runBuild(cmd *cobra.Command, args []string) error {
 		}
 
 		fmt.Printf("Building %s...\n", name)
-		if err := k3sManager.BuildImage(ctx, project.Name, name, svc.Build.Context); err != nil {
+		dockerfile := ""
+		if svc.Build.Dockerfile != "" {
+			dockerfile = svc.Build.Dockerfile
+		}
+		if err := k3sManager.BuildImage(ctx, project.Name, name, svc.Build.Context, dockerfile); err != nil {
 			return fmt.Errorf("failed to build %s: %w", name, err)
 		}
 		fmt.Printf("Built %s\n", name)

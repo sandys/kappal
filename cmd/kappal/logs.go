@@ -25,7 +25,7 @@ var logsCmd = &cobra.Command{
 }
 
 func init() {
-	logsCmd.Flags().BoolVarP(&logsFollow, "follow", "f", false, "Follow log output")
+	logsCmd.Flags().BoolVar(&logsFollow, "follow", false, "Follow log output")
 	logsCmd.Flags().IntVar(&logsTail, "tail", 100, "Number of lines to show from the end")
 }
 
