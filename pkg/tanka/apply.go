@@ -18,7 +18,8 @@ type ApplyOpts struct {
 
 // DeleteOpts configures the delete operation
 type DeleteOpts struct {
-	AutoApprove bool
+	AutoApprove   bool
+	DeleteVolumes bool // If true, delete namespace (including PVCs). If false, only delete deployments/services.
 }
 
 // DiffOpts configures the diff operation
@@ -53,17 +54,34 @@ func Apply(ctx context.Context, ws *workspace.Workspace, kubeconfigPath string, 
 }
 
 // Delete deletes resources in the namespace
+// If DeleteVolumes is true, deletes the entire namespace (including PVCs)
+// If DeleteVolumes is false, only deletes deployments and services (preserving PVCs)
 func Delete(ctx context.Context, namespace, kubeconfigPath string, opts DeleteOpts) error {
-	args := []string{
-		"--kubeconfig", kubeconfigPath,
-		"delete", "namespace", namespace,
-		"--ignore-not-found",
+	if opts.DeleteVolumes {
+		// Delete entire namespace including PVCs
+		args := []string{
+			"--kubeconfig", kubeconfigPath,
+			"delete", "namespace", namespace,
+			"--ignore-not-found",
+		}
+		cmd := exec.CommandContext(ctx, "kubectl", args...)
+		cmd.Stdout = os.Stdout
+		cmd.Stderr = os.Stderr
+		return cmd.Run()
 	}
 
+	// Only delete deployments and services, preserve namespace and PVCs
+	// This allows volumes to persist across down/up cycles
+	args := []string{
+		"--kubeconfig", kubeconfigPath,
+		"delete", "deployments,services,configmaps,secrets,networkpolicies",
+		"-n", namespace,
+		"--all",
+		"--ignore-not-found",
+	}
 	cmd := exec.CommandContext(ctx, "kubectl", args...)
 	cmd.Stdout = os.Stdout
 	cmd.Stderr = os.Stderr
-
 	return cmd.Run()
 }
 

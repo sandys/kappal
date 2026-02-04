@@ -33,6 +33,52 @@ log_skip() {
     ((SKIPPED++)) || true
 }
 
+# =============================================================================
+# INTERNAL HELPERS FOR IMPLEMENTATION VALIDATION
+# These functions verify Kubernetes internals. They are NOT user-facing and
+# should NEVER be exposed to users. Users only interact with kappal commands.
+# =============================================================================
+
+# Internal: Get kubeconfig path from workspace
+_internal_kubeconfig() {
+    echo "$PWD/.kappal/runtime/kubeconfig.yaml"
+}
+
+# Internal: Run kubectl command against kappal's K8s cluster
+# This is for INTERNAL testing only - users never see kubectl
+_internal_kubectl() {
+    local kubeconfig=$(_internal_kubeconfig)
+    if [ -f "$kubeconfig" ]; then
+        kubectl --kubeconfig="$kubeconfig" "$@" 2>/dev/null
+    else
+        # Fallback to docker exec if kubeconfig not available locally
+        docker exec kappal-k3s kubectl "$@" 2>/dev/null
+    fi
+}
+
+# Internal: Verify a K8s Service has UDP protocol configured
+_internal_verify_udp_service() {
+    local namespace="$1"
+    local service="$2"
+    _internal_kubectl get svc -n "$namespace" "$service" -o yaml | grep -q "protocol: UDP"
+}
+
+# Internal: Get replica count from a K8s Deployment
+_internal_get_replicas() {
+    local namespace="$1"
+    local deployment="$2"
+    _internal_kubectl get deploy -n "$namespace" "$deployment" -o jsonpath='{.spec.replicas}'
+}
+
+# Internal: Verify a K8s NetworkPolicy exists
+_internal_verify_networkpolicy() {
+    local namespace="$1"
+    local policy="$2"
+    _internal_kubectl get networkpolicy -n "$namespace" "$policy" -o name
+}
+
+# =============================================================================
+
 # Ensure we're running in Docker with Docker socket mounted
 check_docker() {
     if ! docker info > /dev/null 2>&1; then
@@ -45,6 +91,8 @@ check_docker() {
 cleanup() {
     echo "Cleaning up..."
     docker rm -f kappal-k3s 2>/dev/null || true
+    # Clean up kappal Docker volumes
+    docker volume ls -q | grep '^kappal-' | xargs -r docker volume rm 2>/dev/null || true
     # Clean up .kappal directories in test dirs
     for dir in "$TESTDATA_DIR"/*/; do
         rm -rf "${dir}.kappal" 2>/dev/null || true
@@ -116,11 +164,13 @@ test_simple_network() {
         return
     fi
 
-    sleep 10
+    # Wait for pods to be ready and DNS to stabilize
+    sleep 15
 
     # Test that frontend can reach backend by service name
-    if docker exec kappal-k3s kubectl exec -n network deploy/frontend -- \
-        wget -q -O - http://backend:8080 2>/dev/null | grep -q "OK"; then
+    # Using kappal exec mirrors docker compose exec experience
+    # Use nc for raw TCP test since busybox wget has strict HTTP parsing
+    if kappal exec frontend sh -c "echo 'GET /' | nc -w 5 backend 8080" 2>/dev/null | grep -q "OK"; then
         log_pass "$test_name"
     else
         log_fail "$test_name - service-to-service communication failed"
@@ -142,19 +192,28 @@ test_volume_file() {
         return
     fi
 
-    sleep 5
-
-    # Write data to volume
-    docker exec kappal-k3s kubectl exec -n volume deploy/app -- \
-        sh -c 'echo "test-data" > /data/testfile'
-
-    # Restart deployment
-    docker exec kappal-k3s kubectl rollout restart -n volume deploy/app
+    # Wait for pod to be fully ready
     sleep 10
 
-    # Check data persists
-    if docker exec kappal-k3s kubectl exec -n volume deploy/app -- \
-        cat /data/testfile 2>/dev/null | grep -q "test-data"; then
+    # Write data to volume using kappal exec
+    kappal exec app sh -c 'echo "test-data" > /data/testfile'
+
+    # Verify write succeeded
+    if ! kappal exec app cat /data/testfile 2>/dev/null | grep -q "test-data"; then
+        log_fail "$test_name - failed to write test data"
+        kappal down -v
+        return
+    fi
+
+    # Restart by doing down/up (kappal way, no kubectl exposure)
+    kappal down
+    kappal up -d
+
+    # Wait for pod to be fully ready after restart
+    sleep 15
+
+    # Check data persists using kappal exec
+    if kappal exec app cat /data/testfile 2>/dev/null | grep -q "test-data"; then
         log_pass "$test_name"
     else
         log_fail "$test_name - volume data not persisted"
@@ -178,9 +237,8 @@ test_secret_file() {
 
     sleep 5
 
-    # Check secret is mounted at /run/secrets/
-    if docker exec kappal-k3s kubectl exec -n secret deploy/app -- \
-        cat /run/secrets/my_secret 2>/dev/null | grep -q "secret-value"; then
+    # Check secret is mounted at /run/secrets/ using kappal exec
+    if kappal exec app cat /run/secrets/my_secret 2>/dev/null | grep -q "secret-value"; then
         log_pass "$test_name"
     else
         log_fail "$test_name - secret not accessible"
@@ -204,9 +262,8 @@ test_config_file() {
 
     sleep 5
 
-    # Check config is mounted
-    if docker exec kappal-k3s kubectl exec -n config deploy/app -- \
-        cat /etc/app/config.json 2>/dev/null | grep -q "setting"; then
+    # Check config is mounted using kappal exec
+    if kappal exec app cat /etc/app/config.json 2>/dev/null | grep -q "setting"; then
         log_pass "$test_name"
     else
         log_fail "$test_name - config not accessible"
@@ -230,11 +287,18 @@ test_udp_port() {
 
     sleep 5
 
-    # Check service has UDP port
-    if docker exec kappal-k3s kubectl get svc -n udp dns -o yaml | grep -q "protocol: UDP"; then
-        log_pass "$test_name"
+    # Verify UDP port is working by checking service is up
+    # UDP protocol support is verified by successful deployment
+    if kappal ps | grep -q "Up"; then
+        # Internal verification: check K8s Service has UDP protocol
+        # This is implementation validation, not user-facing
+        if _internal_verify_udp_service "udp" "dns"; then
+            log_pass "$test_name"
+        else
+            log_fail "$test_name - UDP port not configured correctly"
+        fi
     else
-        log_fail "$test_name - UDP port not configured"
+        log_fail "$test_name - service not running"
     fi
 
     kappal down -v
@@ -255,12 +319,18 @@ test_scaling() {
 
     sleep 10
 
-    # Check replicas
-    replicas=$(docker exec kappal-k3s kubectl get deploy -n scaling app -o jsonpath='{.spec.replicas}')
-    if [ "$replicas" = "3" ]; then
-        log_pass "$test_name"
+    # Verify scaling by checking service is up
+    if kappal ps | grep -q "Up"; then
+        # Internal verification: check K8s Deployment has correct replicas
+        # This is implementation validation, not user-facing
+        replicas=$(_internal_get_replicas "scaling" "app")
+        if [ "$replicas" = "3" ]; then
+            log_pass "$test_name"
+        else
+            log_fail "$test_name - expected 3 replicas, got $replicas"
+        fi
     else
-        log_fail "$test_name - expected 3 replicas, got $replicas"
+        log_fail "$test_name - service not running"
     fi
 
     kappal down -v
@@ -281,11 +351,17 @@ test_different_networks() {
 
     sleep 10
 
-    # Check NetworkPolicy exists
-    if docker exec kappal-k3s kubectl get networkpolicy -n networks frontend-net -o name 2>/dev/null; then
-        log_pass "$test_name"
+    # Verify services are up
+    if kappal ps | grep -q "Up"; then
+        # Internal verification: check K8s NetworkPolicy was created
+        # This is implementation validation, not user-facing
+        if _internal_verify_networkpolicy "networks" "frontend-net"; then
+            log_pass "$test_name"
+        else
+            log_fail "$test_name - NetworkPolicy not created"
+        fi
     else
-        log_fail "$test_name - NetworkPolicy not created"
+        log_fail "$test_name - services not running"
     fi
 
     kappal down -v

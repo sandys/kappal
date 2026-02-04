@@ -21,13 +21,16 @@ var (
 var downCmd = &cobra.Command{
 	Use:   "down",
 	Short: "Stop and remove containers",
-	Long:  `Stop and remove containers, networks, and optionally volumes.`,
-	RunE:  runDown,
+	Long: `Stop and remove containers, networks, and K3s.
+
+By default, this stops all services and K3s. Volume data is preserved.
+Use --volumes/-v to also remove persistent volume data.`,
+	RunE: runDown,
 }
 
 func init() {
 	downCmd.Flags().BoolVarP(&downVolumes, "volumes", "v", false, "Remove named volumes and K3s data")
-	downCmd.Flags().BoolVar(&downAll, "all", false, "Remove everything including K3s")
+	downCmd.Flags().BoolVar(&downAll, "all", false, "Remove everything including K3s (deprecated, now default)")
 }
 
 func runDown(cmd *cobra.Command, args []string) error {
@@ -58,25 +61,28 @@ func runDown(cmd *cobra.Command, args []string) error {
 	kubeconfigPath := k3sManager.GetKubeconfigPath()
 
 	// Delete resources via Tanka (uses kubeconfig, NOT docker exec kubectl)
-	if err := tanka.Delete(ctx, project.Name, kubeconfigPath, tanka.DeleteOpts{AutoApprove: true}); err != nil {
+	// If --volumes flag, delete everything including PVCs. Otherwise preserve volumes.
+	if err := tanka.Delete(ctx, project.Name, kubeconfigPath, tanka.DeleteOpts{
+		AutoApprove:   true,
+		DeleteVolumes: downVolumes,
+	}); err != nil {
 		return fmt.Errorf("failed to delete resources: %w", err)
 	}
 
 	fmt.Printf("Stopped services for %s\n", project.Name)
 
-	// Stop K3s if --all or --volumes
-	if downAll || downVolumes {
-		if err := k3sManager.Stop(ctx); err != nil {
-			return fmt.Errorf("failed to stop K3s: %w", err)
-		}
-		fmt.Println("Stopped K3s")
+	// Always stop K3s on down (matches docker-compose behavior of shutting everything down)
+	if err := k3sManager.Stop(ctx); err != nil {
+		return fmt.Errorf("failed to stop K3s: %w", err)
+	}
+	fmt.Println("Stopped K3s")
 
-		if downVolumes {
-			if err := k3sManager.CleanRuntime(); err != nil {
-				return fmt.Errorf("failed to clean runtime: %w", err)
-			}
-			fmt.Println("Removed volumes and runtime data")
+	// Remove volumes and runtime data if --volumes flag is set
+	if downVolumes {
+		if err := k3sManager.CleanRuntime(); err != nil {
+			return fmt.Errorf("failed to clean runtime: %w", err)
 		}
+		fmt.Println("Removed volumes and runtime data")
 	}
 
 	return nil

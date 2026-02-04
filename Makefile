@@ -1,4 +1,4 @@
-.PHONY: build test clean docker-build docker-test conformance
+.PHONY: build test clean docker-build docker-test conformance lint-ux lint-compose lint-adhoc lint-k8s lint-volumes lint-all
 
 # Build binary in Docker
 build:
@@ -39,3 +39,31 @@ fmt:
 # Lint code
 lint:
 	docker run --rm -v $(PWD):/workspace -w /workspace golangci/golangci-lint:latest golangci-lint run
+
+# Lint UX - ensure kubectl is not exposed to users
+lint-ux:
+	@chmod +x scripts/lint-no-kubectl-exposure.sh
+	@./scripts/lint-no-kubectl-exposure.sh
+
+# Lint compose feature coverage - ensure all compose-go fields are properly supported
+lint-compose:
+	@chmod +x scripts/lint-compose-features.sh
+	@./scripts/lint-compose-features.sh
+
+# Lint for ad-hoc Docker commands that should be kappal commands
+lint-adhoc:
+	@chmod +x scripts/lint-no-adhoc-docker.sh
+	@./scripts/lint-no-adhoc-docker.sh
+
+# Lint for correct Kubernetes patterns (command/args, Services for DNS, named volumes)
+lint-k8s:
+	@chmod +x scripts/lint-k8s-patterns.sh
+	@./scripts/lint-k8s-patterns.sh
+
+# Lint for volume persistence patterns (down preserves volumes, down -v removes them)
+lint-volumes:
+	@chmod +x scripts/lint-volume-persistence.sh
+	@./scripts/lint-volume-persistence.sh
+
+# Run all custom lints
+lint-all: lint lint-ux lint-compose lint-adhoc lint-k8s lint-volumes

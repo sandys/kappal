@@ -2,6 +2,8 @@ package k3s
 
 import (
 	"context"
+	"crypto/sha256"
+	"encoding/hex"
 	"fmt"
 	"os"
 	"os/exec"
@@ -30,6 +32,23 @@ func NewManager(workspaceDir string) *Manager {
 		workspaceDir: workspaceDir,
 		runtimeDir:   filepath.Join(workspaceDir, "runtime"),
 	}
+}
+
+// getVolumeNamePrefix returns a unique prefix for named Docker volumes based on workspace path.
+// This ensures volumes are isolated per project directory.
+func (m *Manager) getVolumeNamePrefix() string {
+	// Use hash of absolute workspace path for uniqueness
+	absPath, err := filepath.Abs(m.workspaceDir)
+	if err != nil {
+		absPath = m.workspaceDir
+	}
+	hash := sha256.Sum256([]byte(absPath))
+	return "kappal-" + hex.EncodeToString(hash[:8])
+}
+
+// getK3sDataVolumeName returns the Docker volume name for K3s data
+func (m *Manager) getK3sDataVolumeName() string {
+	return m.getVolumeNamePrefix() + "-k3s-data"
 }
 
 // GetKubeconfigPath returns the path to the kubeconfig file
@@ -79,21 +98,25 @@ func (m *Manager) containerState(ctx context.Context) (running bool, exists bool
 func (m *Manager) start(ctx context.Context) error {
 	fmt.Println("Starting K3s...")
 
-	// Create runtime directory (clean start to avoid stale node records)
-	os.RemoveAll(m.runtimeDir)
+	// Create runtime directory if it doesn't exist
 	if err := os.MkdirAll(m.runtimeDir, 0755); err != nil {
 		return fmt.Errorf("failed to create runtime directory: %w", err)
 	}
 
+	// Use a named Docker volume for K3s data persistence.
+	// This works correctly regardless of whether kappal is running in a container
+	// or on the host, avoiding bind mount path translation issues.
+	k3sDataVolume := m.getK3sDataVolumeName()
+
 	// Start K3s in Docker with host networking
 	// Host networking is required so K3s ServiceLB can bind directly to host ports
-	// for any services the user defines in their compose file
 	args := []string{
 		"run", "-d",
 		"--name", ContainerName,
 		"--privileged",
 		"--restart", "unless-stopped",
 		"--network", "host",
+		"-v", k3sDataVolume + ":/var/lib/rancher/k3s",
 		"-e", "K3S_KUBECONFIG_MODE=644",
 		K3sImage,
 		"server",
@@ -216,7 +239,12 @@ func (m *Manager) BuildImage(ctx context.Context, projectName, serviceName, cont
 	return nil
 }
 
-// CleanRuntime removes the runtime directory
+// CleanRuntime removes the runtime directory and the Docker volume for K3s data
 func (m *Manager) CleanRuntime() error {
+	// Remove the Docker volume for K3s data
+	volumeName := m.getK3sDataVolumeName()
+	cmd := exec.Command("docker", "volume", "rm", "-f", volumeName)
+	cmd.Run() // Ignore errors if volume doesn't exist
+
 	return os.RemoveAll(m.runtimeDir)
 }
