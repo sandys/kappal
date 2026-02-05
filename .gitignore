@@ -15,6 +15,10 @@ kappal
 .DS_Store
 Thumbs.db
 
+# Test directory (keep dir, ignore contents)
+test/*
+!test/.gitkeep
+
 # Test artifacts
 *.test
 coverage.out
