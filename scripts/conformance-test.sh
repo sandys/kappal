@@ -115,7 +115,7 @@ kappal() {
             -v "$PWD:/project" \
             -w /project \
             --network host \
-            kappal:latest "$@"
+            kappal:latest -p "$(basename "$PWD")" "$@"
     fi
 }
 
@@ -377,6 +377,15 @@ main() {
     cleanup
 
     trap cleanup EXIT
+
+    # Run setup in each test directory
+    # Setup pulls the K3s image (once) and creates .kappal/setup.json (per-project)
+    echo "Running kappal setup in test directories..."
+    for dir in "$TESTDATA_DIR"/*/; do
+        if [ -d "$dir" ]; then
+            (cd "$dir" && kappal --setup)
+        fi
+    done
 
     # Run tests
     test_simple_lifecycle

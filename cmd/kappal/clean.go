@@ -39,7 +39,11 @@ func runClean(cmd *cobra.Command, args []string) error {
 	workspaceDir := filepath.Join(projectDir, ".kappal")
 
 	// Stop and remove K3s container if it exists
-	k3sManager := k3s.NewManager(workspaceDir)
+	k3sManager, err := k3s.NewManager(workspaceDir)
+	if err != nil {
+		return fmt.Errorf("failed to create K3s manager: %w", err)
+	}
+	defer func() { _ = k3sManager.Close() }()
 
 	fmt.Println("Stopping K3s...")
 	_ = k3sManager.Stop(ctx) // Ignore error - may not be running

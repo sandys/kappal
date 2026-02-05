@@ -70,7 +70,7 @@ func (c *Client) streamServiceLogs(ctx context.Context, namespace, serviceName s
 	}
 
 	if len(pods.Items) == 0 {
-		fmt.Fprintf(out, "%s | No pods found\n", serviceName)
+		_, _ = fmt.Fprintf(out, "%s | No pods found\n", serviceName)
 		return nil
 	}
 
@@ -98,10 +98,10 @@ func (c *Client) streamPodLogs(ctx context.Context, namespace, podName, serviceN
 
 	stream, err := c.GetPodLogs(ctx, namespace, podName, logOpts)
 	if err != nil {
-		fmt.Fprintf(out, "%s | Error: %v\n", serviceName, err)
+		_, _ = fmt.Fprintf(out, "%s | Error: %v\n", serviceName, err)
 		return
 	}
-	defer stream.Close()
+	defer func() { _ = stream.Close() }()
 
 	scanner := bufio.NewScanner(stream)
 	for scanner.Scan() {
@@ -109,7 +109,7 @@ func (c *Client) streamPodLogs(ctx context.Context, namespace, podName, serviceN
 		case <-ctx.Done():
 			return
 		default:
-			fmt.Fprintf(out, "%s | %s\n", serviceName, scanner.Text())
+			_, _ = fmt.Fprintf(out, "%s | %s\n", serviceName, scanner.Text())
 		}
 	}
 }

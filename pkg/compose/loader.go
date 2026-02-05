@@ -63,7 +63,7 @@ func LoadFromContent(content []byte, projectName string) (*types.Project, error)
 	if err != nil {
 		return nil, err
 	}
-	defer os.RemoveAll(tmpDir)
+	defer func() { _ = os.RemoveAll(tmpDir) }()
 
 	tmpFile := filepath.Join(tmpDir, "docker-compose.yaml")
 	if err := os.WriteFile(tmpFile, content, 0644); err != nil {

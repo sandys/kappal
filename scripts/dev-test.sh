@@ -18,6 +18,16 @@ cd "$PROJECT_DIR/testdata/simple"
 # Clean up any existing
 docker rm -f kappal-k3s 2>/dev/null || true
 
+# Run setup first
+echo ""
+echo "=== Running kappal setup ==="
+docker run --rm \
+    -v /var/run/docker.sock:/var/run/docker.sock \
+    -v "$PWD:/project" \
+    -w /project \
+    --network host \
+    kappal:latest --setup
+
 # Run kappal up
 docker run --rm \
     -v /var/run/docker.sock:/var/run/docker.sock \

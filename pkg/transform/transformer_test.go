@@ -3,6 +3,7 @@ package transform
 import (
 	"strings"
 	"testing"
+	"unicode"
 )
 
 func TestSanitizeName(t *testing.T) {
@@ -60,11 +61,11 @@ func TestSanitizeNameK8sCompliant(t *testing.T) {
 
 		// Check starts/ends with alphanumeric
 		if len(result) > 0 {
-			first, last := result[0], result[len(result)-1]
-			if !((first >= 'a' && first <= 'z') || (first >= '0' && first <= '9')) {
+			first, last := rune(result[0]), rune(result[len(result)-1])
+			if !unicode.IsLower(first) && !unicode.IsDigit(first) {
 				t.Errorf("sanitizeName(%q) = %q doesn't start with alphanumeric", tc, result)
 			}
-			if !((last >= 'a' && last <= 'z') || (last >= '0' && last <= '9')) {
+			if !unicode.IsLower(last) && !unicode.IsDigit(last) {
 				t.Errorf("sanitizeName(%q) = %q doesn't end with alphanumeric", tc, result)
 			}
 		}

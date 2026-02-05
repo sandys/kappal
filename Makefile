@@ -1,14 +1,14 @@
-.PHONY: build test clean docker-build docker-test conformance lint-ux lint-compose lint-adhoc lint-k8s lint-volumes lint-all
+.PHONY: build test clean docker-build docker-test conformance lint-ux lint-compose lint-adhoc lint-k8s lint-volumes lint-exec-docker lint-all
 
 # Build binary in Docker
 build:
 	docker build -f Dockerfile.build -t kappal-builder .
-	docker run --rm -v $(PWD):/output kappal-builder sh -c "cp /usr/local/bin/kappal /output/"
+	docker run --rm --entrypoint sh -v $(PWD):/output kappal-builder -c "cp /usr/local/bin/kappal /output/"
 
 # Run unit tests in Docker
 test:
 	docker build -f Dockerfile.build -t kappal-builder .
-	docker run --rm kappal-builder go test -v ./...
+	docker run --rm --entrypoint go kappal-builder test -v ./...
 
 # Build Docker image for kappal
 docker-build:
@@ -65,5 +65,10 @@ lint-volumes:
 	@chmod +x scripts/lint-volume-persistence.sh
 	@./scripts/lint-volume-persistence.sh
 
+# Lint for exec.Command("docker", ...) in Go code - use Docker SDK instead
+lint-exec-docker:
+	@chmod +x scripts/lint-no-exec-docker.sh
+	@./scripts/lint-no-exec-docker.sh
+
 # Run all custom lints
-lint-all: lint lint-ux lint-compose lint-adhoc lint-k8s lint-volumes
+lint-all: lint lint-ux lint-compose lint-adhoc lint-k8s lint-volumes lint-exec-docker

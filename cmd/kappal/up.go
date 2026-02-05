@@ -72,7 +72,12 @@ func runUp(cmd *cobra.Command, args []string) error {
 	fmt.Println("Generated Kappal workspace in .kappal/")
 
 	// Ensure K3s is running (ONLY Docker command - starts the container)
-	k3sManager := k3s.NewManager(workspaceDir)
+	k3sManager, err := k3s.NewManager(workspaceDir)
+	if err != nil {
+		return fmt.Errorf("failed to create K3s manager: %w", err)
+	}
+	defer func() { _ = k3sManager.Close() }()
+
 	if err := k3sManager.EnsureRunning(ctx); err != nil {
 		return fmt.Errorf("failed to start K3s: %w", err)
 	}

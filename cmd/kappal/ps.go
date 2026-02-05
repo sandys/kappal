@@ -50,7 +50,12 @@ func runPs(cmd *cobra.Command, args []string) error {
 	}
 
 	workspaceDir := filepath.Join(projectDir, ".kappal")
-	k3sManager := k3s.NewManager(workspaceDir)
+	k3sManager, err := k3s.NewManager(workspaceDir)
+	if err != nil {
+		return fmt.Errorf("failed to create K3s manager: %w", err)
+	}
+	defer func() { _ = k3sManager.Close() }()
+
 	kubeconfigPath := k3sManager.GetKubeconfigPath()
 
 	// Get status via client-go (NOT docker exec kubectl)
@@ -76,9 +81,9 @@ func runPs(cmd *cobra.Command, args []string) error {
 		return nil
 	default:
 		w := tabwriter.NewWriter(os.Stdout, 0, 0, 2, ' ', 0)
-		fmt.Fprintln(w, "NAME\tSTATUS\tPORTS")
+		_, _ = fmt.Fprintln(w, "NAME\tSTATUS\tPORTS")
 		for _, s := range statuses {
-			fmt.Fprintf(w, "%s\t%s\t%s\n", s.Name, s.Status, s.Ports)
+			_, _ = fmt.Fprintf(w, "%s\t%s\t%s\n", s.Name, s.Status, s.Ports)
 		}
 		return w.Flush()
 	}

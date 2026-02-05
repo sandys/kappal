@@ -180,8 +180,8 @@ func (t *Transformer) ToSpec() *ComposeSpec {
 		for _, p := range svc.Ports {
 			published := p.Target // default to target if not specified
 			if p.Published != "" {
-				// Parse the published port string
-				fmt.Sscanf(p.Published, "%d", &published)
+				// Parse the published port string; on failure, keep Target as fallback
+				_, _ = fmt.Sscanf(p.Published, "%d", &published)
 			}
 			port := PortSpec{
 				Target:    p.Target,
@@ -600,11 +600,12 @@ func (t *Transformer) generateDeployment(projectName, serviceName string, svc Se
 		}
 		volumeMountLines = append(volumeMountLines, mountLine)
 
-		if v.Type == "volume" || v.Type == "" {
+		switch v.Type {
+		case "volume", "":
 			// Sanitize volume name for PVC reference
 			pvcName := sanitizeName(v.Source)
 			volumeLines = append(volumeLines, fmt.Sprintf("      - name: %s\n        persistentVolumeClaim:\n          claimName: %s", volName, pvcName))
-		} else if v.Type == "bind" {
+		case "bind":
 			volumeLines = append(volumeLines, fmt.Sprintf("      - name: %s\n        hostPath:\n          path: \"%s\"", volName, v.Source))
 		}
 	}
