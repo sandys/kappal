@@ -34,7 +34,7 @@ func (e *Engine) Close() error {
 }
 
 // Build builds an image for a service
-func (e *Engine) Build(ctx context.Context, serviceName, contextDir, dockerfile string) (string, error) {
+func (e *Engine) Build(ctx context.Context, serviceName, contextDir, dockerfile string, buildArgs map[string]*string) (string, error) {
 	imageName := fmt.Sprintf("%s-%s:latest", e.projectName, serviceName)
 
 	// If no dockerfile specified, use default "Dockerfile"
@@ -43,7 +43,7 @@ func (e *Engine) Build(ctx context.Context, serviceName, contextDir, dockerfile 
 		dockerfilePath = "Dockerfile"
 	}
 
-	if err := e.docker.ImageBuild(ctx, contextDir, dockerfilePath, imageName); err != nil {
+	if err := e.docker.ImageBuild(ctx, contextDir, dockerfilePath, imageName, buildArgs); err != nil {
 		return "", fmt.Errorf("build failed: %w", err)
 	}
 
@@ -51,8 +51,8 @@ func (e *Engine) Build(ctx context.Context, serviceName, contextDir, dockerfile 
 }
 
 // BuildWithBuildKit builds using BuildKit (for future enhancement)
-func (e *Engine) BuildWithBuildKit(ctx context.Context, serviceName, contextDir, dockerfile string) (string, error) {
+func (e *Engine) BuildWithBuildKit(ctx context.Context, serviceName, contextDir, dockerfile string, buildArgs map[string]*string) (string, error) {
 	// For now, use standard docker build
 	// TODO: Integrate BuildKit client directly for in-cluster builds
-	return e.Build(ctx, serviceName, contextDir, dockerfile)
+	return e.Build(ctx, serviceName, contextDir, dockerfile, buildArgs)
 }

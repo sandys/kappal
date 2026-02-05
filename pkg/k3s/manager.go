@@ -207,7 +207,7 @@ func (m *Manager) Remove(ctx context.Context) error {
 
 // BuildImage builds an image and loads it into K3s containerd
 // dockerfile is the path to the Dockerfile relative to contextDir (empty string for default "Dockerfile")
-func (m *Manager) BuildImage(ctx context.Context, projectName, serviceName, contextDir, dockerfile string) error {
+func (m *Manager) BuildImage(ctx context.Context, projectName, serviceName, contextDir, dockerfile string, buildArgs map[string]*string) error {
 	imageName := fmt.Sprintf("%s-%s:latest", projectName, serviceName)
 
 	// Build with docker SDK
@@ -219,7 +219,7 @@ func (m *Manager) BuildImage(ctx context.Context, projectName, serviceName, cont
 		dockerfilePath = "Dockerfile"
 	}
 
-	if err := m.docker.ImageBuild(ctx, contextDir, dockerfilePath, imageName); err != nil {
+	if err := m.docker.ImageBuild(ctx, contextDir, dockerfilePath, imageName, buildArgs); err != nil {
 		return fmt.Errorf("docker build failed: %w", err)
 	}
 

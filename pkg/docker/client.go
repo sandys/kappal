@@ -227,7 +227,7 @@ func readDockerignore(contextDir string) ([]string, error) {
 }
 
 // ImageBuild builds an image from context directory
-func (c *Client) ImageBuild(ctx context.Context, contextDir, dockerfile, imageName string) error {
+func (c *Client) ImageBuild(ctx context.Context, contextDir, dockerfile, imageName string, buildArgs map[string]*string) error {
 	// Read .dockerignore patterns
 	excludes, err := readDockerignore(contextDir)
 	if err != nil {
@@ -255,6 +255,7 @@ func (c *Client) ImageBuild(ctx context.Context, contextDir, dockerfile, imageNa
 		Tags:       []string{imageName},
 		Dockerfile: dockerfile,
 		Remove:     true,
+		BuildArgs:  buildArgs,
 	}
 
 	resp, err := c.cli.ImageBuild(ctx, tarCtx, opts)

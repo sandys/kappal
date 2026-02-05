@@ -78,7 +78,9 @@ func runBuild(cmd *cobra.Command, args []string) error {
 		if svc.Build.Dockerfile != "" {
 			dockerfile = svc.Build.Dockerfile
 		}
-		if err := k3sManager.BuildImage(ctx, project.Name, name, svc.Build.Context, dockerfile); err != nil {
+
+		// Only pass explicit build.args from compose file
+		if err := k3sManager.BuildImage(ctx, project.Name, name, svc.Build.Context, dockerfile, svc.Build.Args); err != nil {
 			return fmt.Errorf("failed to build %s: %w", name, err)
 		}
 		fmt.Printf("Built %s\n", name)
