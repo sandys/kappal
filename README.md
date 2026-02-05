@@ -4,17 +4,22 @@
 
 [![Conformance Tests](https://img.shields.io/badge/conformance-8%2F8%20passing-brightgreen)]()
 
+## The Name
+
+*Kappal* (கப்பல்) means "ship" in Tamil. The name honors [V.O. Chidambaram Pillai](https://en.wikipedia.org/wiki/V._O._Chidambaram_Pillai), known as *Kappalottiya Tamizhan* ("The Tamil Helmsman") - a freedom fighter who founded India's first indigenous shipping company.
+
+The nautical theme connects to Kubernetes itself: *Kubernetes* (κυβερνήτης) is Greek for "helmsman" or "pilot" - the person who steers a ship. Kappal steers your containers on the Kubernetes seas, so you don't have to learn navigation.
+
 ## Overview
 
 Kappal lets you use familiar Docker Compose commands while running your services on Kubernetes (K3s). Users never see kubectl, YAML manifests, or Kubernetes concepts - just the same `up`, `down`, `ps`, `logs`, and `exec` commands they already know.
 
 ```bash
-# Instead of learning Kubernetes...
-kappal up -d                    # Start services (like docker compose up -d)
-kappal ps                       # List services (like docker compose ps)
-kappal logs api                 # View logs (like docker compose logs)
-kappal exec web sh              # Shell into service (like docker compose exec)
-kappal down                     # Stop services (like docker compose down)
+kappal up -d                    # Start services
+kappal ps                       # List services
+kappal logs api                 # View logs
+kappal exec web sh              # Shell into service
+kappal down                     # Stop services
 ```
 
 ## Features
@@ -38,22 +43,20 @@ kappal down                     # Stop services (like docker compose down)
 | ~~kubectl~~ | Not needed - included in Kappal image |
 | ~~K3s~~ | Not needed - runs as a container |
 
-When you run Kappal, it automatically:
-- Pulls and starts K3s (lightweight Kubernetes)
-- Builds your application images
-- Loads images into K3s
-- Deploys your services
-
 ## Installation
-
-### Fresh laptop setup
 
 ```bash
 # 1. Install Docker (if not already installed)
 curl -fsSL https://get.docker.com | sh
 
 # 2. Pull kappal image
-docker pull kappal/kappal:latest
+docker pull ghcr.io/kappal-app/kappal:latest
+
+# 3. Add alias to your shell (~/.bashrc or ~/.zshrc)
+echo 'alias kappal='\''docker run --rm -v /var/run/docker.sock:/var/run/docker.sock -v "$(pwd):/project" -w /project --network host ghcr.io/kappal-app/kappal:latest'\''' >> ~/.bashrc
+
+# 4. Reload shell
+source ~/.bashrc
 ```
 
 That's it. You're ready to use Kappal.
@@ -64,84 +67,26 @@ That's it. You're ready to use Kappal.
 # Navigate to your project with docker-compose.yaml
 cd /path/to/your/project
 
-# Start services
-docker run --rm \
-  -v /var/run/docker.sock:/var/run/docker.sock \
-  -v "$(pwd):/project" \
-  -w /project \
-  --network host \
-  kappal/kappal:latest up -d
+# Start services in detached mode
+kappal up -d
 
 # Check status
-docker run --rm \
-  -v /var/run/docker.sock:/var/run/docker.sock \
-  -v "$(pwd):/project" \
-  -w /project \
-  --network host \
-  kappal/kappal:latest ps
+kappal ps
 
 # View logs
-docker run --rm \
-  -v /var/run/docker.sock:/var/run/docker.sock \
-  -v "$(pwd):/project" \
-  -w /project \
-  --network host \
-  kappal/kappal:latest logs
+kappal logs
+
+# View logs for specific service
+kappal logs api
+
+# Shell into a service
+kappal exec web sh
 
 # Stop everything
-docker run --rm \
-  -v /var/run/docker.sock:/var/run/docker.sock \
-  -v "$(pwd):/project" \
-  -w /project \
-  --network host \
-  kappal/kappal:latest down
-```
-
-### Recommended: Create an alias
-
-Add to your `~/.bashrc` or `~/.zshrc`:
-
-```bash
-alias kappal='docker run --rm -v /var/run/docker.sock:/var/run/docker.sock -v "$(pwd):/project" -w /project --network host kappal/kappal:latest'
-```
-
-Then use it like Docker Compose:
-
-```bash
-kappal up -d
-kappal ps
-kappal logs api
-kappal exec web sh
 kappal down
-```
 
-### Monorepo / Custom build contexts
-
-If your `docker-compose.yml` references parent directories (e.g., `build: context: ../..`), mount from the project root:
-
-```bash
-cd /path/to/project/root
-
-docker run --rm \
-  -v /var/run/docker.sock:/var/run/docker.sock \
-  -v "$(pwd):/project" \
-  -w /project/path/to/compose/dir \
-  --network host \
-  kappal/kappal:latest up --build -f docker-compose.yml
-```
-
-### Building from source
-
-```bash
-# Clone the repo
-git clone https://github.com/kappal-app/kappal.git
-cd kappal
-
-# Build Docker image
-make docker-build
-
-# Or build binary (requires Go 1.22+)
-go build -o kappal ./cmd/kappal
+# Stop and remove volumes
+kappal down -v
 ```
 
 ## Commands
@@ -149,6 +94,7 @@ go build -o kappal ./cmd/kappal
 | Command | Description |
 |---------|-------------|
 | `kappal up [-d]` | Create and start services |
+| `kappal up --build` | Build images and start services |
 | `kappal down [-v]` | Stop and remove services (-v removes volumes) |
 | `kappal ps` | List running services |
 | `kappal logs [service]` | View service logs |
@@ -175,6 +121,18 @@ go build -o kappal ./cmd/kappal
 | UDP ports | ✅ | `ports: ["53:53/udp"]` |
 | Depends On | ⚠️ | Partial (ordering only) |
 | Healthchecks | 🚧 | Planned |
+
+## Monorepo / Custom Build Contexts
+
+If your `docker-compose.yml` references parent directories (e.g., `build: context: ../..`), you need to mount from the project root and set the working directory:
+
+```bash
+# For monorepos, create a project-specific alias
+alias kappal-myproject='docker run --rm -v /var/run/docker.sock:/var/run/docker.sock -v "/path/to/project/root:/project" -w /project/path/to/compose/dir --network host ghcr.io/kappal-app/kappal:latest'
+
+# Then use normally
+kappal-myproject up --build
+```
 
 ## How It Works
 
@@ -207,27 +165,13 @@ docker-compose.yaml
 3. **Persistent by default** - Volumes survive `down`/`up` cycles (use `-v` to remove)
 4. **Standard tools** - Uses compose-go (official parser), K3s, client-go
 
-## Architecture
-
-```
-kappal/
-├── cmd/kappal/          # CLI commands (up, down, ps, logs, exec)
-├── pkg/
-│   ├── compose/         # compose-go wrapper
-│   ├── transform/       # Compose → K8s manifest transformer
-│   ├── k3s/             # K3s lifecycle management
-│   ├── k8s/             # client-go wrapper for status, logs, exec
-│   ├── tanka/           # kubectl apply/delete wrapper
-│   └── workspace/       # .kappal/ directory management
-├── scripts/
-│   ├── conformance-test.sh
-│   └── lint-*.sh        # Code quality checks
-└── testdata/            # Conformance test fixtures
-```
-
 ## Development
 
 ```bash
+# Clone the repo
+git clone https://github.com/kappal-app/kappal.git
+cd kappal
+
 # Build Docker image
 make docker-build
 
@@ -236,9 +180,6 @@ make conformance
 
 # Run all lints
 make lint-all
-
-# Format code
-make fmt
 ```
 
 ### Conformance Tests
@@ -253,17 +194,6 @@ Kappal passes all 8 conformance tests based on the [compose-spec](https://github
 - UdpPort - UDP protocol support
 - Scaling - Replica scaling
 - DifferentNetworks - Network isolation
-
-### Lint Checks
-
-```bash
-make lint-ux       # Ensure kubectl not exposed to users
-make lint-compose  # Ensure compose features fully supported
-make lint-adhoc    # Ensure no ad-hoc Docker workarounds
-make lint-k8s      # Ensure correct K8s patterns (command/args, Services for DNS)
-make lint-volumes  # Ensure volume persistence (down preserves, down -v removes)
-make lint-all      # Run all lints
-```
 
 ## FAQ
 
