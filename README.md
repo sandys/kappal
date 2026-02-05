@@ -67,6 +67,9 @@ That's it. You're ready to use Kappal.
 # Navigate to your project with docker-compose.yaml
 cd /path/to/your/project
 
+# First-time setup (required once per project)
+kappal --setup
+
 # Start services in detached mode
 kappal up -d
 
@@ -93,6 +96,7 @@ kappal down -v
 
 | Command | Description |
 |---------|-------------|
+| `kappal --setup` | Set up kappal for this project (required first time) |
 | `kappal up [-d]` | Create and start services |
 | `kappal up --build` | Build images and start services |
 | `kappal down [-v]` | Stop and remove services (-v removes volumes) |
@@ -101,6 +105,7 @@ kappal down -v
 | `kappal exec <service> <cmd>` | Execute command in service |
 | `kappal build` | Build images from Dockerfiles |
 | `kappal clean` | Remove kappal workspace and K3s |
+| `kappal eject` | Export as standalone Tanka workspace |
 
 ## Compose Features Supported
 
@@ -174,6 +179,9 @@ cd kappal
 
 # Build Docker image
 make docker-build
+
+# Run unit tests
+make test
 
 # Run conformance tests (all 8 must pass)
 make conformance
