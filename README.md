@@ -50,12 +50,13 @@ kappal down                     # Stop services
 curl -fsSL https://get.docker.com | sh
 
 # 2. Pull kappal image
-docker pull ghcr.io/kappal-app/kappal:latest
+docker pull ghcr.io/sandys/kappal:latest
 
-# 3. Add alias to your shell (~/.bashrc or ~/.zshrc)
-echo 'alias kappal='\''docker run --rm -v /var/run/docker.sock:/var/run/docker.sock -v "$(pwd):/project" -w /project --network host ghcr.io/kappal-app/kappal:latest'\''' >> ~/.bashrc
+# 3. Add alias (for current session)
+alias kappal='docker run --rm -v /var/run/docker.sock:/var/run/docker.sock -v "$(pwd):/project" -w /project --network host ghcr.io/sandys/kappal:latest'
 
-# 4. Reload shell
+# Or save permanently to ~/.bashrc or ~/.zshrc
+echo "alias kappal='docker run --rm -v /var/run/docker.sock:/var/run/docker.sock -v \"\$(pwd):/project\" -w /project --network host ghcr.io/sandys/kappal:latest'" >> ~/.bashrc
 source ~/.bashrc
 ```
 
@@ -127,13 +128,36 @@ kappal down -v
 | Depends On | ⚠️ | Partial (ordering only) |
 | Healthchecks | 🚧 | Planned |
 
-## Monorepo / Custom Build Contexts
+## Examples
+
+### Compose File in Subdirectory
+
+If your `docker-compose.yml` is in a subdirectory (e.g., `deploy/docker-compose/`), use the `-f` flag:
+
+```bash
+# Project structure:
+# myproject/
+# ├── apps/
+# ├── packages/
+# └── deploy/
+#     └── docker-compose/
+#         └── docker-compose.yml
+
+# Option 1: Use -f flag with relative path
+kappal -f deploy/docker-compose/docker-compose.yml up
+
+# Option 2: cd into the directory
+cd deploy/docker-compose
+kappal -f docker-compose.yml up
+```
+
+### Monorepo / Custom Build Contexts
 
 If your `docker-compose.yml` references parent directories (e.g., `build: context: ../..`), you need to mount from the project root and set the working directory:
 
 ```bash
 # For monorepos, create a project-specific alias
-alias kappal-myproject='docker run --rm -v /var/run/docker.sock:/var/run/docker.sock -v "/path/to/project/root:/project" -w /project/path/to/compose/dir --network host ghcr.io/kappal-app/kappal:latest'
+alias kappal-myproject='docker run --rm -v /var/run/docker.sock:/var/run/docker.sock -v "/path/to/project/root:/project" -w /project/path/to/compose/dir --network host ghcr.io/sandys/kappal:latest'
 
 # Then use normally
 kappal-myproject up --build
