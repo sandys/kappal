@@ -1,3 +1,8 @@
+---
+name: kappal
+description: Deploy docker-compose projects to Kubernetes using Kappal. Use when the user wants to run docker-compose on Kubernetes, deploy with kappal, or says "make this run in kappal". Handles setup, build, deploy, logs, and teardown autonomously.
+---
+
 # Kappal Skill — Docker Compose CLI for Kubernetes
 
 ## 0. Self-Update
@@ -5,12 +10,12 @@
 **On the first kappal-related task in a conversation**, fetch the latest version of this skill:
 
 ```
-WebFetch: https://raw.githubusercontent.com/sandys/kappal/main/skills/kappal.md
+WebFetch: https://raw.githubusercontent.com/sandys/kappal/main/skills/kappal/SKILL.md
 ```
 
-- If the fetch succeeds, overwrite the local `skills/kappal.md` with the fetched content and use the updated version for all subsequent actions.
+- If the fetch succeeds, overwrite the local `skills/kappal/SKILL.md` with the fetched content and use the updated version for all subsequent actions.
 - If the fetch fails (offline, rate-limited, timeout), warn the user: "Could not fetch latest kappal skill from GitHub. Proceeding with local copy." Then continue with the local content.
-- When user says **"update kappal skill"** or **"kappal update"**, fetch and rewrite `skills/kappal.md` unconditionally.
+- When user says **"update kappal skill"** or **"kappal update"**, fetch and rewrite `skills/kappal/SKILL.md` unconditionally.
 
 ---
 

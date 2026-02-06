@@ -165,7 +165,7 @@ kappal-myproject up --build
 
 ## AI Agent / Claude Code Integration
 
-Kappal includes a skill file ([`skills/kappal.md`](skills/kappal.md)) that lets [Claude Code](https://docs.anthropic.com/en/docs/agents-and-tools/claude-code/overview) and other AI coding agents deploy docker-compose projects to Kubernetes autonomously.
+Kappal includes a skill file ([`skills/kappal/SKILL.md`](skills/kappal/SKILL.md)) that lets [Claude Code](https://docs.anthropic.com/en/docs/agents-and-tools/claude-code/overview) and other AI coding agents deploy docker-compose projects to Kubernetes autonomously.
 
 **How it works:** Claude reads the skill file and handles the full lifecycle — setup, build, deploy, logs, teardown — without the user needing to know kappal internals.
 
