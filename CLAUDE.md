@@ -12,3 +12,13 @@ For manual testing, use the kappal-builder container:
 ```bash
 docker run --rm -v /var/run/docker.sock:/var/run/docker.sock -v $(pwd):/workspace -w /workspace ghcr.io/sandys/kappal:latest kappal [command]
 ```
+
+## Skill File Maintenance
+
+`skills/kappal.md` is the canonical skill file for AI agent integration. It is **distinct from the README**:
+- **README** = marketing/product documentation for humans
+- **Skill file** = structured instructions for AI agents (Claude Code, etc.)
+
+When the README is updated with new commands, features, or usage patterns, **the skill file must also be updated** to reflect those changes. The two files cover overlapping content but serve different audiences.
+
+The skill file auto-updates from GitHub (`https://raw.githubusercontent.com/sandys/kappal/main/skills/kappal.md`) once per conversation when used by an AI agent. This means the GitHub version is the source of truth for deployed agents.

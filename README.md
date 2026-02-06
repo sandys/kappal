@@ -163,6 +163,18 @@ alias kappal-myproject='docker run --rm -v /var/run/docker.sock:/var/run/docker.
 kappal-myproject up --build
 ```
 
+## AI Agent / Claude Code Integration
+
+Kappal includes a skill file ([`skills/kappal.md`](skills/kappal.md)) that lets [Claude Code](https://docs.anthropic.com/en/docs/agents-and-tools/claude-code/overview) and other AI coding agents deploy docker-compose projects to Kubernetes autonomously.
+
+**How it works:** Claude reads the skill file and handles the full lifecycle — setup, build, deploy, logs, teardown — without the user needing to know kappal internals.
+
+**What the user says:** Just tell Claude "deploy this with kappal" or "run this docker-compose in kappal" and it handles the rest.
+
+**Self-updating:** The skill auto-fetches the latest version from GitHub at the start of each conversation, so it stays current with breaking changes and new features.
+
+**No other container orchestration tool offers native AI agent integration** — docker compose, podman, and others require the user to know the CLI. Kappal works with AI agents out of the box.
+
 ## How It Works
 
 ```
