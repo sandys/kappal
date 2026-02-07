@@ -63,15 +63,15 @@ func main() {
 				allDone = false
 				break
 			}
+			if isJobFailed(job) {
+				fmt.Fprintf(os.Stderr, "Job %s failed\n", jobName)
+				os.Exit(1)
+			}
 			if !isJobComplete(job) {
 				fmt.Printf("Job %s not yet complete (succeeded=%d, failed=%d)\n",
 					jobName, job.Status.Succeeded, job.Status.Failed)
 				allDone = false
 				break
-			}
-			if isJobFailed(job) {
-				fmt.Fprintf(os.Stderr, "Job %s failed\n", jobName)
-				os.Exit(1)
 			}
 		}
 
