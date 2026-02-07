@@ -195,7 +195,7 @@ kappal-myproject up --build
 
 ## Programmatic Access (`kappal inspect`)
 
-`kappal inspect` outputs a self-documenting JSON object with full runtime state — services, ports, replicas, pod IPs, and K3s container info. The JSON includes a `_schema` field describing every data field.
+`kappal inspect` outputs a self-documenting JSON object combining compose file service definitions with live K8s and Docker runtime state — ports, replicas, pod IPs, and K3s container info. The JSON includes a `_schema` field describing every data field. If K3s is running but the API is unreachable, services are listed with status `"unavailable"`. Services in the compose file but not deployed show status `"missing"`.
 
 ```bash
 # Full project state

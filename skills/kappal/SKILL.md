@@ -202,7 +202,7 @@ Run `<kappal-docker-run> ps` and report service status to the user.
 
 ## 5a. Programmatic Inspection (`kappal inspect`)
 
-`kappal inspect` outputs a self-documenting JSON object with the full runtime state of a project. Use it instead of `ps` when you need machine-readable data — ports, pod IPs, replica counts, or K3s container info.
+`kappal inspect` outputs a self-documenting JSON object combining compose file service definitions with live K8s and Docker runtime state. Use it instead of `ps` when you need machine-readable data — ports, pod IPs, replica counts, or K3s container info. If K3s is running but the API is unreachable, services are listed with status `"unavailable"`. Services in the compose file but not deployed show status `"missing"`.
 
 ### JSON Structure
 
@@ -245,11 +245,11 @@ Run `<kappal-docker-run> ps` and report service status to the user.
 | `services[].name` | Service name from docker-compose.yaml. Used as K8s Deployment/Job name and DNS hostname. |
 | `services[].kind` | K8s workload type. `Deployment` for long-running services, `Job` for run-to-completion (`restart: no`). |
 | `services[].image` | Container image. For locally-built images: `<project>-<service>:latest`. |
-| `services[].status` | Aggregated health. Values: `running`, `waiting`, `partial`, `completed`, `failed`, `pending`. |
+| `services[].status` | Aggregated health. Deployment: `running`, `waiting`, `partial`. Job: `completed`, `running`, `failing`, `failed`, `pending`. Other: `missing` (in compose but not in K8s), `unavailable` (K8s API unreachable). |
 | `services[].replicas.ready` | Number of pods running and passing readiness checks. |
 | `services[].replicas.desired` | Target replica count from `deploy.replicas` (default 1). |
 | `services[].ports[].host` | Port number on the Docker host. Use for external access (curl, browser). |
-| `services[].ports[].container` | Port number inside the container. Use for service-to-service communication. |
+| `services[].ports[].container` | Target port for the K8s Service and container (the compose `target` value). Kappal sets both the K8s Service port and targetPort to this value. |
 | `services[].ports[].protocol` | Transport protocol: `tcp` or `udp`. |
 | `services[].pods[].name` | K8s pod name (auto-generated with random suffix). |
 | `services[].pods[].status` | K8s pod phase: `Running`, `Pending`, `Succeeded`, `Failed`, `Unknown`. |
