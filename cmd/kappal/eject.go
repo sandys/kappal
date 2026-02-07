@@ -19,7 +19,25 @@ var ejectCmd = &cobra.Command{
 	Use:   "eject",
 	Short: "Export as standalone Tanka workspace",
 	Long: `Export the generated Jsonnet as a standalone Tanka workspace.
-This allows you to customize the Kubernetes manifests directly.`,
+
+Creates a self-contained Tanka project directory with Jsonnet files, a jsonnetfile
+for dependency management, and an environments/default configuration. This lets you
+customize Kubernetes manifests directly and manage them with standard Tanka tooling
+(tk show, tk apply, tk diff).
+
+The ejected workspace is independent of kappal — you can modify the Jsonnet, add
+resources, or integrate it into a GitOps pipeline. After ejecting, use "jb install"
+to fetch Jsonnet dependencies, then "tk show environments/default" to preview
+manifests.
+
+Flags:
+  -o, --output <dir>   Output directory (default: "tanka")
+  -f <path>            Compose file path (default: docker-compose.yaml)
+  -p <name>            Override project name
+
+Examples:
+  kappal eject                    Export to ./tanka/
+  kappal eject -o k8s-manifests   Export to ./k8s-manifests/`,
 	RunE: runEject,
 }
 

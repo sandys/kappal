@@ -22,7 +22,31 @@ var (
 var psCmd = &cobra.Command{
 	Use:   "ps",
 	Short: "List containers",
-	Long:  `List containers and their status.`,
+	Long: `List containers and their status.
+
+Queries the Kubernetes API via client-go to show the current state of all services
+in the project. By default outputs an aligned table; use -o json for machine-readable
+output or -o yaml for YAML.
+
+Table columns:
+  NAME     Service name from docker-compose.yaml
+  STATUS   Pod phase (Running, Pending, Succeeded, Failed)
+  PORTS    Published host:container port mappings
+
+For richer machine-readable output with replicas, pod IPs, and K3s state, use
+"kappal inspect" instead.
+
+Flags:
+  -o, --format <fmt>   Output format: table (default), json, yaml
+  -a, --all            Show all containers including stopped
+  -f <path>            Compose file path (default: docker-compose.yaml)
+  -p <name>            Override project name
+
+Examples:
+  kappal ps                  Table view of all services
+  kappal ps -o json          JSON output for scripting
+  kappal ps -o json | jq '.[] | select(.Status=="Running")'
+                             Filter running services`,
 	RunE:  runPs,
 }
 

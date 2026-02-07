@@ -24,7 +24,29 @@ var (
 var upCmd = &cobra.Command{
 	Use:   "up",
 	Short: "Create and start containers",
-	Long:  `Create and start containers defined in the Compose file.`,
+	Long: `Create and start containers defined in the Compose file.
+
+Parses docker-compose.yaml, generates Kubernetes manifests, ensures a K3s instance
+is running for this project, and applies the manifests via Tanka. Waits up to 5
+minutes for all pods to become ready before returning.
+
+Services with "restart: no" run as one-shot Kubernetes Jobs. Services with
+depends_on condition: service_completed_successfully get init containers that block
+until the dependency Job finishes. Services with profiles are excluded.
+
+Port chain: compose ports → K3s container port bindings → K8s NodePort services.
+Published ports bind to the Docker host and are accessible via localhost.
+
+Flags:
+  -d, --detach   Run in the background (currently always detaches after readiness)
+  --build        Build images (from build.context in compose) before starting
+  -f <path>      Compose file path (default: docker-compose.yaml)
+  -p <name>      Override project name
+
+Examples:
+  kappal up -d                Start all services
+  kappal up --build -d        Build images then start
+  kappal -p myapp up -d       Start with explicit project name`,
 	RunE:  runUp,
 }
 

@@ -185,6 +185,8 @@ Run `<kappal-docker-run> ps` and report service status to the user.
 | N/A | `<kappal> clean` | Remove kappal workspace + K3s |
 | N/A | `<kappal> eject -o tanka/` | Export as standalone Tanka workspace |
 
+| N/A | `<kappal> inspect` | Machine-readable JSON state of the entire project |
+
 ### Additional Flags
 
 | Flag | Scope | Description |
@@ -195,6 +197,101 @@ Run `<kappal-docker-run> ps` and report service status to the user.
 | `logs --tail 50` | logs | Last N lines |
 | `exec -it` | exec | Interactive TTY |
 | `exec --index 2` | exec | Target specific replica |
+
+---
+
+## 5a. Programmatic Inspection (`kappal inspect`)
+
+`kappal inspect` outputs a self-documenting JSON object with the full runtime state of a project. Use it instead of `ps` when you need machine-readable data — ports, pod IPs, replica counts, or K3s container info.
+
+### JSON Structure
+
+```json
+{
+  "_schema": { "...": "field descriptions (see below)" },
+  "project": "myapp",
+  "k3s": {
+    "container": "kappal-myapp-k3s",
+    "status": "running",
+    "network": "kappal-myapp-net"
+  },
+  "services": [
+    {
+      "name": "web",
+      "kind": "Deployment",
+      "image": "myapp-web:latest",
+      "status": "running",
+      "replicas": { "ready": 2, "desired": 2 },
+      "ports": [
+        { "host": 8080, "container": 80, "protocol": "tcp" }
+      ],
+      "pods": [
+        { "name": "web-abc123", "status": "Running", "ip": "10.42.0.5" },
+        { "name": "web-def456", "status": "Running", "ip": "10.42.0.6" }
+      ]
+    }
+  ]
+}
+```
+
+### Field Reference (from `_schema`)
+
+| Field Path | Description |
+|---|---|
+| `project` | Compose project name, derived from directory name or `-p` flag. Also used as the K8s namespace. |
+| `k3s.container` | Docker container name running this project's K3s instance (format: `kappal-<project>-k3s`). |
+| `k3s.status` | K3s container state. Values: `running`, `stopped`, `not found`. |
+| `k3s.network` | Docker bridge network isolating this project (format: `kappal-<project>-net`). |
+| `services[].name` | Service name from docker-compose.yaml. Used as K8s Deployment/Job name and DNS hostname. |
+| `services[].kind` | K8s workload type. `Deployment` for long-running services, `Job` for run-to-completion (`restart: no`). |
+| `services[].image` | Container image. For locally-built images: `<project>-<service>:latest`. |
+| `services[].status` | Aggregated health. Values: `running`, `waiting`, `partial`, `completed`, `failed`, `pending`. |
+| `services[].replicas.ready` | Number of pods running and passing readiness checks. |
+| `services[].replicas.desired` | Target replica count from `deploy.replicas` (default 1). |
+| `services[].ports[].host` | Port number on the Docker host. Use for external access (curl, browser). |
+| `services[].ports[].container` | Port number inside the container. Use for service-to-service communication. |
+| `services[].ports[].protocol` | Transport protocol: `tcp` or `udp`. |
+| `services[].pods[].name` | K8s pod name (auto-generated with random suffix). |
+| `services[].pods[].status` | K8s pod phase: `Running`, `Pending`, `Succeeded`, `Failed`, `Unknown`. |
+| `services[].pods[].ip` | Pod's cluster-internal IP on the K3s overlay network. |
+
+### Common `jq` Recipes
+
+```bash
+# Get host port for a specific service
+<kappal> inspect | jq '.services[] | select(.name=="web") | .ports[0].host'
+
+# Check if all services are running
+<kappal> inspect | jq '[.services[] | .status] | all(. == "running")'
+
+# List pod IPs for a service
+<kappal> inspect | jq '.services[] | select(.name=="api") | .pods[].ip'
+
+# Find services that are not fully ready
+<kappal> inspect | jq '.services[] | select(.status != "running" and .status != "completed")'
+
+# Get K3s status
+<kappal> inspect | jq '.k3s.status'
+```
+
+### When to Use `inspect` vs `ps`
+
+| Need | Use |
+|---|---|
+| Quick human-readable status check | `kappal ps` |
+| Machine-readable JSON for scripting | `kappal inspect` |
+| Get published host ports | `kappal inspect` (only source of port data in JSON) |
+| Check pod IPs or replica counts | `kappal inspect` |
+| Verify K3s container is running | `kappal inspect` |
+
+### Integration Pattern
+
+Use `inspect` to dynamically resolve ports before making HTTP requests:
+
+```bash
+PORT=$(<kappal> inspect | jq '.services[] | select(.name=="web") | .ports[0].host')
+curl http://localhost:$PORT/health
+```
 
 ---
 

@@ -132,6 +132,7 @@ kappal down -v
 | `kappal logs [service]` | View service logs |
 | `kappal exec <service> <cmd>` | Execute command in service |
 | `kappal build` | Build images from Dockerfiles |
+| `kappal inspect` | Show project state as self-documenting JSON |
 | `kappal clean` | Remove kappal workspace and K3s |
 | `kappal eject` | Export as standalone Tanka workspace |
 
@@ -191,6 +192,30 @@ alias kappal-myproject='docker run --rm -v /var/run/docker.sock:/var/run/docker.
 # Then use normally
 kappal-myproject up --build
 ```
+
+## Programmatic Access (`kappal inspect`)
+
+`kappal inspect` outputs a self-documenting JSON object with full runtime state — services, ports, replicas, pod IPs, and K3s container info. The JSON includes a `_schema` field describing every data field.
+
+```bash
+# Full project state
+kappal inspect
+
+# Get host port for a service
+kappal inspect | jq '.services[] | select(.name=="web") | .ports[0].host'
+
+# Check if all services are running
+kappal inspect | jq '[.services[] | .status] | all(. == "running")'
+
+# List pod IPs
+kappal inspect | jq '.services[] | select(.name=="api") | .pods[].ip'
+
+# Dynamic port resolution for testing
+PORT=$(kappal inspect | jq '.services[] | select(.name=="web") | .ports[0].host')
+curl http://localhost:$PORT/health
+```
+
+Use `inspect` instead of `ps` when you need machine-readable data. The `ps` command is better for quick human-readable status checks.
 
 ## AI Agent / Claude Code Integration
 

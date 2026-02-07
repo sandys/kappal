@@ -14,7 +14,27 @@ import (
 var buildCmd = &cobra.Command{
 	Use:   "build [SERVICE...]",
 	Short: "Build or rebuild services",
-	Long:  `Build images for services with a build context defined.`,
+	Long: `Build images for services that have a build context in the compose file.
+
+For each service with a "build:" section, runs docker build inside the project's
+K3s container so the image is immediately available to Kubernetes (no registry push
+needed). If SERVICE arguments are given, only those services are built; otherwise
+all buildable services are built.
+
+Image naming: images are tagged as <project>-<service>:latest. The build context
+path and optional dockerfile are taken from the compose file's build.context and
+build.dockerfile fields. Build args from build.args are passed as --build-arg.
+
+K3s must be running (started automatically if not). Images are loaded directly
+into K3s's containerd, bypassing any external registry.
+
+Flags:
+  -f <path>      Compose file path (default: docker-compose.yaml)
+  -p <name>      Override project name
+
+Examples:
+  kappal build              Build all services with build contexts
+  kappal build web api      Build only the web and api services`,
 	RunE:  runBuild,
 }
 
