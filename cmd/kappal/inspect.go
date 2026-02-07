@@ -77,9 +77,9 @@ var inspectSchema = map[string]string{
 	"services[].ports[].host":     "Port number on the Docker host. Use this for curl/HTTP requests from outside.",
 	"services[].ports[].container": "Target port for the K8s Service and container (the compose 'target' value). Kappal sets both the K8s Service port and targetPort to this value.",
 	"services[].ports[].protocol": "Transport protocol. Values: 'tcp', 'udp'.",
-	"services[].pods":             "Individual pod instances for this service. Multiple pods appear when replicas > 1.",
+	"services[].pods":             "Individual pod instances for this service. For Deployments, only Running/Pending pods are shown. For Jobs, all pods (including Succeeded/Failed) are shown to reflect execution history.",
 	"services[].pods[].name":      "K8s pod name (auto-generated, includes random suffix).",
-	"services[].pods[].status":    "K8s pod phase. Values: 'Running', 'Pending', 'Succeeded', 'Failed', 'Unknown'.",
+	"services[].pods[].status":    "K8s pod phase. Deployment pods: 'Running', 'Pending'. Job pods: 'Running', 'Pending', 'Succeeded', 'Failed', 'Unknown'.",
 	"services[].pods[].ip":        "Pod's cluster-internal IP address on the K3s overlay network.",
 }
 
@@ -372,12 +372,20 @@ func runInspect(cmd *cobra.Command, args []string) error {
 			svc.Image = composeSvc.Image
 			svc.Status = "unavailable"
 		} else if di, ok := deploymentMap[name]; ok {
+			// Deployment checked first: if both exist (stale drift), Deployment wins.
+			// This is safe because up.go deletes all Jobs before re-applying manifests.
 			svc.Kind = "Deployment"
 			svc.Image = di.image
 			svc.Status = di.status
 			svc.Replicas = di.replicas
+			// Filter to Running/Pending pods only — completed/failed pods from
+			// previous rollouts accumulate because K8s has no TTL on them.
 			if pods := podsByService[name]; pods != nil {
-				svc.Pods = pods
+				for _, p := range pods {
+					if p.Status == "Running" || p.Status == "Pending" {
+						svc.Pods = append(svc.Pods, p)
+					}
+				}
 			}
 			// Correlate ports
 			for _, sp := range svcPortMap[name] {
