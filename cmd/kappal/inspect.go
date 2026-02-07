@@ -67,7 +67,7 @@ var inspectSchema = map[string]string{
 	"k3s.network":                 "Docker bridge network isolating this project (format: kappal-<project>-net).",
 	"services":                    "Array of services from the compose file (excluding profiled services). Each maps to a K8s Deployment or Job.",
 	"services[].name":             "Service name from docker-compose.yaml. Used as K8s Deployment/Job name and DNS hostname.",
-	"services[].kind":             "K8s workload type. 'Deployment' for long-running services, 'Job' for run-to-completion (restart: no).",
+	"services[].kind":             "K8s workload type. When K8s is reachable, reflects actual cluster resource kind. When unavailable/missing, derived from compose restart policy. 'Deployment' for long-running, 'Job' for run-to-completion.",
 	"services[].image":            "Container image running in this service. For locally-built images: '<project>-<service>:latest'.",
 	"services[].status":           "Aggregated service health. Deployment values: 'running' (all replicas ready), 'waiting' (0 ready), 'partial' (some ready). Job values: 'completed' (succeeded), 'running' (active), 'failing' (active with prior failures), 'failed' (all failed), 'pending' (not started). Other: 'missing' (in compose but not in K8s), 'unavailable' (K8s API unreachable).",
 	"services[].replicas":         "Replica counts for Deployments only. Omitted for Jobs.",
@@ -357,56 +357,63 @@ func runInspect(cmd *cobra.Command, args []string) error {
 			continue
 		}
 
-		isJob := composeSvc.Restart == "no"
-		kind := "Deployment"
-		if isJob {
-			kind = "Job"
+		composeKind := "Deployment"
+		if composeSvc.Restart == "no" {
+			composeKind = "Job"
 		}
 
 		svc := inspectService{
 			Name: name,
-			Kind: kind,
 			Pods: []inspectPod{},
 		}
 
 		if !k8sAvailable {
+			svc.Kind = composeKind
 			svc.Image = composeSvc.Image
 			svc.Status = "unavailable"
-		} else if isJob {
-			if ji, ok := jobMap[name]; ok {
-				svc.Image = ji.image
-				svc.Status = ji.status
-				if pods := podsByService[name]; pods != nil {
-					svc.Pods = pods
+		} else if di, ok := deploymentMap[name]; ok {
+			svc.Kind = "Deployment"
+			svc.Image = di.image
+			svc.Status = di.status
+			svc.Replicas = di.replicas
+			if pods := podsByService[name]; pods != nil {
+				svc.Pods = pods
+			}
+			// Correlate ports
+			for _, sp := range svcPortMap[name] {
+				key := fmt.Sprintf("%d/%s", sp.port, sp.protocol)
+				hostPort := portMap[key]
+				if hostPort > 0 {
+					svc.Ports = append(svc.Ports, inspectPort{
+						Host:      hostPort,
+						Container: int(sp.port),
+						Protocol:  sp.protocol,
+					})
 				}
-			} else {
-				svc.Image = composeSvc.Image
-				svc.Status = "missing"
+			}
+		} else if ji, ok := jobMap[name]; ok {
+			svc.Kind = "Job"
+			svc.Image = ji.image
+			svc.Status = ji.status
+			if pods := podsByService[name]; pods != nil {
+				svc.Pods = pods
+			}
+			// Correlate ports
+			for _, sp := range svcPortMap[name] {
+				key := fmt.Sprintf("%d/%s", sp.port, sp.protocol)
+				hostPort := portMap[key]
+				if hostPort > 0 {
+					svc.Ports = append(svc.Ports, inspectPort{
+						Host:      hostPort,
+						Container: int(sp.port),
+						Protocol:  sp.protocol,
+					})
+				}
 			}
 		} else {
-			if di, ok := deploymentMap[name]; ok {
-				svc.Image = di.image
-				svc.Status = di.status
-				svc.Replicas = di.replicas
-				if pods := podsByService[name]; pods != nil {
-					svc.Pods = pods
-				}
-				// Correlate ports
-				for _, sp := range svcPortMap[name] {
-					key := fmt.Sprintf("%d/%s", sp.port, sp.protocol)
-					hostPort := portMap[key]
-					if hostPort > 0 {
-						svc.Ports = append(svc.Ports, inspectPort{
-							Host:      hostPort,
-							Container: int(sp.port),
-							Protocol:  sp.protocol,
-						})
-					}
-				}
-			} else {
-				svc.Image = composeSvc.Image
-				svc.Status = "missing"
-			}
+			svc.Kind = composeKind
+			svc.Image = composeSvc.Image
+			svc.Status = "missing"
 		}
 
 		result.Services = append(result.Services, svc)
