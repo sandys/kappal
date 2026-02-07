@@ -61,7 +61,7 @@ just familiar Compose commands.`,
 
 func init() {
 	rootCmd.PersistentFlags().StringVarP(&composeFile, "file", "f", "docker-compose.yaml", "Compose file path")
-	rootCmd.PersistentFlags().StringVarP(&projectName, "project-name", "p", "", "Project name (defaults to directory name)")
+	rootCmd.PersistentFlags().StringVarP(&projectName, "project-name", "p", "", "Project name (defaults to directory name with path hash)")
 
 	// Add --setup flag
 	rootCmd.Flags().BoolVar(&runSetup, "setup", false, "Set up kappal (pull K3s image, verify Docker)")

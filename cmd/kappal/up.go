@@ -71,7 +71,8 @@ func runUp(cmd *cobra.Command, args []string) error {
 	}
 
 	// Load compose file
-	project, err := compose.Load(composePath, projectName)
+	resolvedName := resolveProjectName(projectName, filepath.Dir(composePath))
+	project, err := compose.Load(composePath, resolvedName)
 	if err != nil {
 		return fmt.Errorf("failed to load compose file: %w", err)
 	}

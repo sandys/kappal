@@ -34,6 +34,7 @@ kappal down                     # Stop services
 - **Dependency Ordering** - `depends_on` with `service_completed_successfully` for Jobs
 - **One-Shot Services** - `restart: "no"` runs as K8s Jobs (migrations, seeds, etc.)
 - **Profiles** - Services with `profiles` excluded from default `up`
+- **Worktree-Safe Naming** - Each directory gets a unique project name (hash-based), so git worktrees or copies with the same basename don't collide
 
 ## Dependency Ordering & One-Shot Services
 
@@ -228,6 +229,12 @@ Kappal includes a skill file ([`skills/kappal/SKILL.md`](skills/kappal/SKILL.md)
 **Self-updating:** The skill auto-fetches the latest version from GitHub at the start of each conversation, so it stays current with breaking changes and new features.
 
 **No other container orchestration tool offers native AI agent integration** — docker compose, podman, and others require the user to know the CLI. Kappal works with AI agents out of the box.
+
+## Project Naming
+
+Kappal derives the project name from the compose file's directory path: `<basename>-<8-char-hash>`. This means two directories named `myapp` in different locations (e.g. git worktrees) get distinct project names and never interfere with each other. Symlinks to the same physical directory produce the same name.
+
+Override with `-p <name>` if you need a specific project name.
 
 ## How It Works
 

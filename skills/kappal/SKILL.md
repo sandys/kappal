@@ -192,7 +192,7 @@ Run `<kappal-docker-run> ps` and report service status to the user.
 | Flag | Scope | Description |
 |---|---|---|
 | `-f <path>` | Global (before command) | Specify compose file path |
-| `-p <name>` | Global (before command) | Override project name |
+| `-p <name>` | Global (before command) | Override project name (default: `<basename>-<8-char-hash>` from compose dir path) |
 | `ps -o json` | ps | JSON output |
 | `logs --tail 50` | logs | Last N lines |
 | `exec -it` | exec | Interactive TTY |
@@ -327,7 +327,17 @@ These are **separate concerns** — never confuse them:
 
 ---
 
-## 8. Common Pitfalls
+## 8. Project Naming
+
+Kappal derives the project name from the compose file's directory: `<sanitised-basename>-<8-char-sha256-hash>`. This makes names **worktree-safe** — two directories with the same basename (e.g. git worktrees, multiple clones) get different project names and never share K3s containers or networks. Symlinks to the same physical directory produce the same name.
+
+Override with `-p <name>` when you need a fixed name (e.g. scripting, CI).
+
+**Important for AI agents:** Do not hard-code project names derived from directory basenames alone. Always use `kappal inspect | jq '.project'` to discover the actual project name at runtime.
+
+---
+
+## 9. Common Pitfalls
 
 1. **Monorepo mount path** — If any `build.context` goes above the compose directory, the `-v` mount must start from the highest needed ancestor. Getting this wrong causes "file not found" during builds.
 

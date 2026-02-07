@@ -6,7 +6,6 @@ import (
 	"os"
 	"path/filepath"
 
-	"github.com/kappal-app/kappal/pkg/compose"
 	"github.com/kappal-app/kappal/pkg/k3s"
 	"github.com/spf13/cobra"
 )
@@ -39,20 +38,12 @@ func runClean(cmd *cobra.Command, args []string) error {
 
 	workspaceDir := filepath.Join(projectDir, ".kappal")
 
-	// Resolve project name: from -p flag, compose file, or directory basename
-	projName := projectName
-	if projName == "" {
-		composePath := composeFile
-		if !filepath.IsAbs(composePath) {
-			composePath = filepath.Join(projectDir, composePath)
-		}
-		project, err := compose.Load(composePath, "")
-		if err == nil {
-			projName = project.Name
-		} else {
-			projName = filepath.Base(projectDir)
-		}
+	// Resolve project name: from -p flag, or directory-based with hash
+	composePath := composeFile
+	if !filepath.IsAbs(composePath) {
+		composePath = filepath.Join(projectDir, composePath)
 	}
+	projName := resolveProjectName(projectName, filepath.Dir(composePath))
 
 	// Stop and remove K3s container if it exists
 	k3sManager, err := k3s.NewManager(workspaceDir, projName)
