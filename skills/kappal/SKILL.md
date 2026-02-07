@@ -202,7 +202,7 @@ Run `<kappal-docker-run> ps` and report service status to the user.
 
 ## 5a. Programmatic Inspection (`kappal inspect`)
 
-`kappal inspect` outputs a self-documenting JSON object combining compose file service definitions with live K8s and Docker runtime state. Use it instead of `ps` when you need machine-readable data — ports, pod IPs, replica counts, or K3s container info. If K3s is running but the API is unreachable, services are listed with status `"unavailable"`. Services in the compose file but not deployed show status `"missing"`.
+`kappal inspect` outputs a self-documenting JSON object combining compose file service definitions with live K8s and Docker runtime state. Use it instead of `ps` when you need machine-readable data — ports, pod IPs, replica counts, or K3s container info. If K3s is running but the API is unreachable, services are listed with status `"unavailable"`. Services in the compose file but not deployed show status `"missing"`. For Deployments, only Running/Pending pods are shown (historical completed/failed pods are filtered out). For Jobs, all pods are shown including Succeeded/Failed to reflect execution history.
 
 ### JSON Structure
 
@@ -252,7 +252,7 @@ Run `<kappal-docker-run> ps` and report service status to the user.
 | `services[].ports[].container` | Target port for the K8s Service and container (the compose `target` value). Kappal sets both the K8s Service port and targetPort to this value. |
 | `services[].ports[].protocol` | Transport protocol: `tcp` or `udp`. |
 | `services[].pods[].name` | K8s pod name (auto-generated with random suffix). |
-| `services[].pods[].status` | K8s pod phase: `Running`, `Pending`, `Succeeded`, `Failed`, `Unknown`. |
+| `services[].pods[].status` | K8s pod phase. Deployment pods: `Running`, `Pending`. Job pods: `Running`, `Pending`, `Succeeded`, `Failed`, `Unknown`. |
 | `services[].pods[].ip` | Pod's cluster-internal IP on the K3s overlay network. |
 
 ### Common `jq` Recipes
