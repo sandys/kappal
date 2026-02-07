@@ -12,12 +12,14 @@ import (
 
 	"github.com/docker/docker/api/types"
 	"github.com/docker/docker/api/types/container"
+	"github.com/docker/docker/api/types/network"
 	"github.com/docker/docker/api/types/volume"
 	"github.com/docker/docker/client"
 	"github.com/docker/docker/errdefs"
 	"github.com/docker/docker/pkg/archive"
 	"github.com/docker/docker/pkg/jsonmessage"
 	"github.com/docker/docker/pkg/stdcopy"
+	"github.com/docker/go-connections/nat"
 )
 
 // Client wraps the Docker SDK client
@@ -201,6 +203,69 @@ func (c *Client) ContainerExecStream(ctx context.Context, name string, cmd []str
 	return nil
 }
 
+// NetworkCreate creates a Docker bridge network. Idempotent - returns nil if network already exists.
+func (c *Client) NetworkCreate(ctx context.Context, name string) error {
+	_, err := c.cli.NetworkCreate(ctx, name, types.NetworkCreate{
+		Driver:     "bridge",
+		CheckDuplicate: true,
+	})
+	if err != nil {
+		// If network already exists, treat as success
+		if strings.Contains(err.Error(), "already exists") {
+			return nil
+		}
+		return fmt.Errorf("failed to create network %s: %w", name, err)
+	}
+	return nil
+}
+
+// NetworkRemove removes a Docker network. Idempotent - returns nil if network doesn't exist.
+func (c *Client) NetworkRemove(ctx context.Context, name string) error {
+	err := c.cli.NetworkRemove(ctx, name)
+	if err != nil {
+		if errdefs.IsNotFound(err) {
+			return nil
+		}
+		return fmt.Errorf("failed to remove network %s: %w", name, err)
+	}
+	return nil
+}
+
+// ContainerInspectPorts returns the port bindings of a running container.
+func (c *Client) ContainerInspectPorts(ctx context.Context, name string) (nat.PortMap, error) {
+	inspect, err := c.cli.ContainerInspect(ctx, name)
+	if err != nil {
+		return nil, fmt.Errorf("failed to inspect container %s: %w", name, err)
+	}
+	return inspect.HostConfig.PortBindings, nil
+}
+
+// ContainerCreate creates a container without starting it, optionally connected to a network
+func (c *Client) ContainerCreateWithNetwork(ctx context.Context, config *container.Config, hostConfig *container.HostConfig, networkName string, name string) (string, error) {
+	var networkingConfig *network.NetworkingConfig
+	if networkName != "" {
+		networkingConfig = &network.NetworkingConfig{
+			EndpointsConfig: map[string]*network.EndpointSettings{
+				networkName: {},
+			},
+		}
+	}
+	resp, err := c.cli.ContainerCreate(ctx, config, hostConfig, networkingConfig, nil, name)
+	if err != nil {
+		return "", fmt.Errorf("failed to create container %s: %w", name, err)
+	}
+	return resp.ID, nil
+}
+
+// ContainerRunWithNetwork creates and starts a container connected to a network
+func (c *Client) ContainerRunWithNetwork(ctx context.Context, config *container.Config, hostConfig *container.HostConfig, networkName string, name string) error {
+	containerID, err := c.ContainerCreateWithNetwork(ctx, config, hostConfig, networkName, name)
+	if err != nil {
+		return err
+	}
+	return c.ContainerStart(ctx, containerID)
+}
+
 // readDockerignore reads .dockerignore file and returns exclude patterns
 func readDockerignore(contextDir string) ([]string, error) {
 	dockerignorePath := filepath.Join(contextDir, ".dockerignore")
@@ -314,6 +379,46 @@ func (c *Client) VolumeCreate(ctx context.Context, name string) error {
 		return fmt.Errorf("failed to create volume %s: %w", name, err)
 	}
 	return nil
+}
+
+// NetworkConnect connects a container to a network. Idempotent.
+func (c *Client) NetworkConnect(ctx context.Context, networkName, containerID string) error {
+	err := c.cli.NetworkConnect(ctx, networkName, containerID, nil)
+	if err != nil {
+		// Already connected is not an error
+		if strings.Contains(err.Error(), "already exists") {
+			return nil
+		}
+		return fmt.Errorf("failed to connect container %s to network %s: %w", containerID, networkName, err)
+	}
+	return nil
+}
+
+// ContainerIPOnNetwork returns the IP address of a container on a specific network.
+func (c *Client) ContainerIPOnNetwork(ctx context.Context, containerName, networkName string) (string, error) {
+	inspect, err := c.cli.ContainerInspect(ctx, containerName)
+	if err != nil {
+		return "", fmt.Errorf("failed to inspect container %s: %w", containerName, err)
+	}
+	if inspect.NetworkSettings == nil || inspect.NetworkSettings.Networks == nil {
+		return "", fmt.Errorf("container %s has no network settings", containerName)
+	}
+	endpoint, ok := inspect.NetworkSettings.Networks[networkName]
+	if !ok {
+		return "", fmt.Errorf("container %s not connected to network %s", containerName, networkName)
+	}
+	return endpoint.IPAddress, nil
+}
+
+// ImageTag tags an image with a new name
+func (c *Client) ImageTag(ctx context.Context, source, target string) error {
+	return c.cli.ImageTag(ctx, source, target)
+}
+
+// ImageExists checks if an image exists locally
+func (c *Client) ImageExists(ctx context.Context, imageName string) bool {
+	_, _, err := c.cli.ImageInspectWithRaw(ctx, imageName)
+	return err == nil
 }
 
 // ImagePull pulls an image from a registry

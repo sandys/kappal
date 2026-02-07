@@ -1,0 +1,30 @@
+services:
+  # Job 1: simple setup task that exits
+  setup:
+    image: busybox:latest
+    command: ["sh", "-c", "echo 'setup complete' && sleep 2"]
+    restart: "no"
+
+  # Job 2: depends on setup completing
+  migrate:
+    image: busybox:latest
+    command: ["sh", "-c", "echo 'migration done' && sleep 2"]
+    restart: "no"
+    depends_on:
+      setup:
+        condition: service_completed_successfully
+
+  # Long-running service: depends on migrate completing
+  app:
+    image: busybox:latest
+    command: ["sh", "-c", "while true; do sleep 3600; done"]
+    depends_on:
+      migrate:
+        condition: service_completed_successfully
+
+  # Profiled service: should NOT start on default `up`
+  tools:
+    image: busybox:latest
+    command: ["sleep", "3600"]
+    profiles:
+      - debug

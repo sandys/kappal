@@ -10,7 +10,8 @@ RUN go mod download || true
 
 # Copy source and build
 COPY . .
-RUN go mod tidy && CGO_ENABLED=0 go build -ldflags="-s -w" -o /kappal ./cmd/kappal
+RUN go mod tidy && CGO_ENABLED=0 go build -ldflags="-s -w" -o /kappal ./cmd/kappal && \
+    CGO_ENABLED=0 go build -ldflags="-s -w" -o /kappal-init ./cmd/kappal-init
 
 # Stage 2: Runtime (with Docker CLI for K3s management)
 FROM docker:24-cli
@@ -24,8 +25,9 @@ RUN apk add --no-cache \
     chmod +x kubectl && \
     mv kubectl /usr/local/bin/
 
-# Copy kappal binary
+# Copy kappal binaries
 COPY --from=builder /kappal /usr/local/bin/kappal
+COPY --from=builder /kappal-init /usr/local/bin/kappal-init
 
 # Set working directory
 WORKDIR /project

@@ -114,6 +114,9 @@ Parse it for:
 - **Port mappings** — note which ports will be exposed
 - **Named volumes** — note persistent data
 - **`deploy.replicas`** — note scaling configuration
+- **`restart: "no"`** — these services will run as one-shot Jobs (migrations, seeds, etc.)
+- **`depends_on` with conditions** — note any `service_completed_successfully` dependencies (Jobs will complete before dependents start)
+- **`profiles:`** — these services will be excluded from default `up`
 
 ### Step 3: Detect scenario
 
@@ -147,6 +150,9 @@ Run setup silently — do not ask the user about this step:
 Tell the user:
 - Which services will start
 - Which services will be built (those with `build:`)
+- Which services will run as one-shot Jobs (`restart: "no"`)
+- Which services are excluded due to profiles
+- Any dependency ordering (`depends_on` with `service_completed_successfully`)
 - What ports will be exposed
 - Any volumes that will be created
 
@@ -196,15 +202,17 @@ Run `<kappal-docker-run> ps` and report service status to the user.
 
 ### Fully Supported
 
-services, image, build (context + dockerfile + args), ports (TCP/UDP), volumes (named), environment, env_file, secrets, configs, networks, command, entrypoint, deploy.replicas, labels, restart
+services, image, build (context + dockerfile + args), ports (TCP/UDP), volumes (named), environment, env_file, secrets, configs, networks, command, entrypoint, deploy.replicas, labels, restart, depends_on (including `service_completed_successfully`), profiles, one-shot services (Jobs)
 
-### Partial Support
+### Key Behaviors
 
-- **depends_on** — ordering is respected, but conditions (`service_healthy`, `service_completed_successfully`) are parsed and **NOT enforced**
+- **`restart: "no"`** — Services with this setting run as Kubernetes Jobs instead of Deployments. They execute once and stop cleanly (no CrashLoopBackOff). Use for migrations, seeds, setup tasks.
+- **`depends_on` with `condition: service_completed_successfully`** — Kappal injects an init container that waits for the dependency Job to complete before starting the dependent service. This works for both Job-to-Job and Job-to-Deployment dependencies.
+- **`profiles`** — Services with `profiles:` are excluded from `kappal up` by default, matching Docker Compose behavior. Profile activation is not yet supported.
 
 ### Not Supported
 
-profiles, extends, resource limits (mem/cpu), healthcheck enforcement, log drivers
+extends, resource limits (mem/cpu), healthcheck enforcement, log drivers, profile activation (`--profile`)
 
 ---
 
@@ -226,7 +234,7 @@ These are **separate concerns** — never confuse them:
 
 1. **Monorepo mount path** — If any `build.context` goes above the compose directory, the `-v` mount must start from the highest needed ancestor. Getting this wrong causes "file not found" during builds.
 
-2. **depends_on conditions** — Kappal handles startup ordering but does NOT enforce health or completion conditions. Services may start before their dependencies are truly ready. If the app needs a "wait-for-it" pattern, it should be handled in the app's entrypoint.
+2. **depends_on conditions** — Kappal fully supports `service_completed_successfully` for Job dependencies. However, `service_healthy` is not yet enforced. For health-based readiness, handle it in the app's entrypoint.
 
 3. **YAML anchors** — `x-*` extension fields and YAML anchors work fine. They are parsed by compose-go.
 

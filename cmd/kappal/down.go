@@ -57,7 +57,7 @@ func runDown(cmd *cobra.Command, args []string) error {
 		return fmt.Errorf("workspace not found (run 'kappal up' first): %w", err)
 	}
 
-	k3sManager, err := k3s.NewManager(workspaceDir)
+	k3sManager, err := k3s.NewManager(workspaceDir, project.Name)
 	if err != nil {
 		return fmt.Errorf("failed to create K3s manager: %w", err)
 	}
@@ -67,18 +67,22 @@ func runDown(cmd *cobra.Command, args []string) error {
 
 	// Delete resources via Tanka (uses kubeconfig, NOT docker exec kubectl)
 	// If --volumes flag, delete everything including PVCs. Otherwise preserve volumes.
+	// Continue cleanup even if tanka delete fails (e.g. stale kubeconfig, K3s unreachable)
 	if err := tanka.Delete(ctx, project.Name, kubeconfigPath, tanka.DeleteOpts{
 		AutoApprove:   true,
 		DeleteVolumes: downVolumes,
 	}); err != nil {
-		return fmt.Errorf("failed to delete resources: %w", err)
+		fmt.Fprintf(os.Stderr, "Warning: failed to delete resources (continuing cleanup): %v\n", err)
+	} else {
+		fmt.Printf("Stopped services for %s\n", project.Name)
 	}
 
-	fmt.Printf("Stopped services for %s\n", project.Name)
-
-	// Always stop K3s on down (matches docker-compose behavior of shutting everything down)
+	// Always stop and remove K3s on down (matches docker-compose behavior)
 	if err := k3sManager.Stop(ctx); err != nil {
-		return fmt.Errorf("failed to stop K3s: %w", err)
+		fmt.Fprintf(os.Stderr, "Warning: failed to stop K3s: %v\n", err)
+	}
+	if err := k3sManager.Remove(ctx); err != nil {
+		fmt.Fprintf(os.Stderr, "Warning: failed to remove K3s container: %v\n", err)
 	}
 	fmt.Println("Stopped K3s")
 

@@ -6,6 +6,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"time"
 
 	"github.com/kappal-app/kappal/pkg/workspace"
 )
@@ -57,14 +58,19 @@ func Apply(ctx context.Context, ws *workspace.Workspace, kubeconfigPath string, 
 // If DeleteVolumes is true, deletes the entire namespace (including PVCs)
 // If DeleteVolumes is false, only deletes deployments and services (preserving PVCs)
 func Delete(ctx context.Context, namespace, kubeconfigPath string, opts DeleteOpts) error {
+	// Use a timeout to prevent kubectl from hanging on stuck finalizers
+	deleteCtx, cancel := context.WithTimeout(ctx, 60*time.Second)
+	defer cancel()
+
 	if opts.DeleteVolumes {
 		// Delete entire namespace including PVCs
 		args := []string{
 			"--kubeconfig", kubeconfigPath,
 			"delete", "namespace", namespace,
 			"--ignore-not-found",
+			"--wait=false",
 		}
-		cmd := exec.CommandContext(ctx, "kubectl", args...)
+		cmd := exec.CommandContext(deleteCtx, "kubectl", args...)
 		cmd.Stdout = os.Stdout
 		cmd.Stderr = os.Stderr
 		return cmd.Run()
@@ -74,12 +80,13 @@ func Delete(ctx context.Context, namespace, kubeconfigPath string, opts DeleteOp
 	// This allows volumes to persist across down/up cycles
 	args := []string{
 		"--kubeconfig", kubeconfigPath,
-		"delete", "deployments,services,configmaps,secrets,networkpolicies",
+		"delete", "deployments,services,configmaps,secrets,networkpolicies,jobs,roles,rolebindings",
 		"-n", namespace,
 		"--all",
 		"--ignore-not-found",
+		"--wait=false",
 	}
-	cmd := exec.CommandContext(ctx, "kubectl", args...)
+	cmd := exec.CommandContext(deleteCtx, "kubectl", args...)
 	cmd.Stdout = os.Stdout
 	cmd.Stderr = os.Stderr
 	return cmd.Run()

@@ -52,7 +52,7 @@ _internal_kubectl() {
         kubectl --kubeconfig="$kubeconfig" "$@" 2>/dev/null
     else
         # Fallback to docker exec if kubeconfig not available locally
-        docker exec kappal-k3s kubectl "$@" 2>/dev/null
+        docker exec "kappal-$(basename "$PWD")-k3s" kubectl "$@" 2>/dev/null
     fi
 }
 
@@ -77,6 +77,41 @@ _internal_verify_networkpolicy() {
     _internal_kubectl get networkpolicy -n "$namespace" "$policy" -o name
 }
 
+# Internal: Get a K8s resource kind for a named resource
+_internal_get_resource_kind() {
+    local namespace="$1"
+    local name="$2"
+    if _internal_kubectl get job -n "$namespace" "$name" -o name 2>/dev/null | grep -q "job"; then
+        echo "Job"
+    elif _internal_kubectl get deploy -n "$namespace" "$name" -o name 2>/dev/null | grep -q "deployment"; then
+        echo "Deployment"
+    else
+        echo "Unknown"
+    fi
+}
+
+# Internal: Get pod phase for a service
+_internal_get_pod_phase() {
+    local namespace="$1"
+    local label="$2"
+    _internal_kubectl get pod -n "$namespace" -l "$label" -o jsonpath='{.items[0].status.phase}' 2>/dev/null
+}
+
+# Internal: Check if a pod has an init container with a given name
+_internal_has_init_container() {
+    local namespace="$1"
+    local label="$2"
+    local init_name="$3"
+    _internal_kubectl get pod -n "$namespace" -l "$label" -o jsonpath='{.items[0].spec.initContainers[*].name}' 2>/dev/null | grep -q "$init_name"
+}
+
+# Internal: Get restart policy for a pod
+_internal_get_restart_policy() {
+    local namespace="$1"
+    local label="$2"
+    _internal_kubectl get pod -n "$namespace" -l "$label" -o jsonpath='{.items[0].spec.restartPolicy}' 2>/dev/null
+}
+
 # =============================================================================
 
 # Ensure we're running in Docker with Docker socket mounted
@@ -90,7 +125,9 @@ check_docker() {
 # Clean up any existing test resources
 cleanup() {
     echo "Cleaning up..."
-    docker rm -f kappal-k3s 2>/dev/null || true
+    # Remove all kappal K3s containers and networks
+    docker ps -a --filter "name=kappal-" -q | xargs -r docker rm -f 2>/dev/null || true
+    docker network ls --filter "name=kappal-" -q | xargs -r docker network rm 2>/dev/null || true
     # Clean up kappal Docker volumes
     docker volume ls -q | grep '^kappal-' | xargs -r docker volume rm 2>/dev/null || true
     # Clean up .kappal directories in test dirs
@@ -167,10 +204,18 @@ test_simple_network() {
     # Wait for pods to be ready and DNS to stabilize
     sleep 15
 
+    # Look up the backend's container port dynamically via kappal inspect
+    BACKEND_PORT=$(kappal inspect | jq -r '.services[] | select(.name=="backend") | .ports[0].container')
+    if [ -z "$BACKEND_PORT" ] || [ "$BACKEND_PORT" = "null" ]; then
+        log_fail "$test_name - could not determine backend port from kappal inspect"
+        kappal down -v
+        return
+    fi
+
     # Test that frontend can reach backend by service name
     # Using kappal exec mirrors docker compose exec experience
     # Use nc for raw TCP test since busybox wget has strict HTTP parsing
-    if kappal exec frontend sh -c "echo 'GET /' | nc -w 5 backend 8080" 2>/dev/null | grep -q "OK"; then
+    if kappal exec frontend sh -c "echo 'GET /' | nc -w 5 backend $BACKEND_PORT" 2>/dev/null | grep -q "OK"; then
         log_pass "$test_name"
     else
         log_fail "$test_name - service-to-service communication failed"
@@ -367,6 +412,145 @@ test_different_networks() {
     kappal down -v
 }
 
+# Test: Jobs complete and don't restart (restart: "no" -> K8s Job)
+test_job_lifecycle() {
+    local test_name="JobLifecycle"
+    local test_dir="$TESTDATA_DIR/jobs"
+
+    echo "Running test: $test_name"
+    cd "$test_dir"
+
+    if ! kappal up -d; then
+        log_fail "$test_name - kappal up failed"
+        return
+    fi
+
+    # Wait for jobs to complete and service to start
+    sleep 20
+
+    # Assert 1: app service is running
+    if ! kappal ps | grep -q "app.*Up"; then
+        log_fail "$test_name - app service not running"
+        kappal ps
+        kappal down -v
+        return
+    fi
+
+    # Assert 2: setup job completed (K8s Job, not Deployment)
+    local setup_kind=$(_internal_get_resource_kind "jobs" "setup")
+    if [ "$setup_kind" != "Job" ]; then
+        log_fail "$test_name - 'setup' is $setup_kind, expected Job"
+        kappal down -v
+        return
+    fi
+
+    # Assert 3: setup pod reached Succeeded phase
+    local setup_phase=$(_internal_get_pod_phase "jobs" "kappal.io/service=setup")
+    if [ "$setup_phase" != "Succeeded" ]; then
+        log_fail "$test_name - setup pod phase is '$setup_phase', expected Succeeded"
+        kappal down -v
+        return
+    fi
+
+    # Assert 4: Job pods have restartPolicy: Never
+    local restart=$(_internal_get_restart_policy "jobs" "kappal.io/service=setup")
+    if [ "$restart" != "Never" ]; then
+        log_fail "$test_name - setup restart policy is '$restart', expected Never"
+        kappal down -v
+        return
+    fi
+
+    log_pass "$test_name"
+    kappal down -v
+}
+
+# Test: depends_on service_completed_successfully ordering
+test_dependency_ordering() {
+    local test_name="DependencyOrdering"
+    local test_dir="$TESTDATA_DIR/jobs"
+
+    echo "Running test: $test_name"
+    cd "$test_dir"
+
+    if ! kappal up -d; then
+        log_fail "$test_name - kappal up failed"
+        return
+    fi
+
+    sleep 20
+
+    # Assert 1: migrate job also completed
+    local migrate_phase=$(_internal_get_pod_phase "jobs" "kappal.io/service=migrate")
+    if [ "$migrate_phase" != "Succeeded" ]; then
+        log_fail "$test_name - migrate pod phase is '$migrate_phase', expected Succeeded"
+        kappal down -v
+        return
+    fi
+
+    # Assert 2: app pod has init container (wait-for-deps) for dependency on migrate
+    if ! _internal_has_init_container "jobs" "kappal.io/service=app" "wait-for-deps"; then
+        log_fail "$test_name - app pod missing wait-for-deps init container"
+        kappal down -v
+        return
+    fi
+
+    # Assert 3: migrate pod has init container for dependency on setup
+    if ! _internal_has_init_container "jobs" "kappal.io/service=migrate" "wait-for-deps"; then
+        log_fail "$test_name - migrate pod missing wait-for-deps init container"
+        kappal down -v
+        return
+    fi
+
+    # Assert 4: app is Running (started after migrate completed)
+    local app_phase=$(_internal_get_pod_phase "jobs" "kappal.io/service=app")
+    if [ "$app_phase" != "Running" ]; then
+        log_fail "$test_name - app pod phase is '$app_phase', expected Running"
+        kappal down -v
+        return
+    fi
+
+    log_pass "$test_name"
+    kappal down -v
+}
+
+# Test: Profiles excluded from default up
+test_profile_exclusion() {
+    local test_name="ProfileExclusion"
+    local test_dir="$TESTDATA_DIR/jobs"
+
+    echo "Running test: $test_name"
+    cd "$test_dir"
+
+    if ! kappal up -d; then
+        log_fail "$test_name - kappal up failed"
+        return
+    fi
+
+    sleep 15
+
+    # Assert: 'tools' service (profiles: [debug]) should NOT appear in ps
+    if kappal ps 2>/dev/null | grep -q "tools"; then
+        log_fail "$test_name - profiled service 'tools' should not be running"
+        kappal down -v
+        return
+    fi
+
+    # Internal: verify no K8s resources created for 'tools'
+    if _internal_kubectl get deploy -n "jobs" "tools" -o name 2>/dev/null | grep -q "tools"; then
+        log_fail "$test_name - Deployment created for profiled service 'tools'"
+        kappal down -v
+        return
+    fi
+    if _internal_kubectl get job -n "jobs" "tools" -o name 2>/dev/null | grep -q "tools"; then
+        log_fail "$test_name - Job created for profiled service 'tools'"
+        kappal down -v
+        return
+    fi
+
+    log_pass "$test_name"
+    kappal down -v
+}
+
 # Main
 main() {
     echo "=========================================="
@@ -396,6 +580,9 @@ main() {
     test_udp_port
     test_scaling
     test_different_networks
+    test_job_lifecycle
+    test_dependency_ordering
+    test_profile_exclusion
 
     echo ""
     echo "=========================================="

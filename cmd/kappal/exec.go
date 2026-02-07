@@ -80,7 +80,7 @@ func runExec(cmd *cobra.Command, args []string) error {
 	}
 
 	workspaceDir := filepath.Join(projectDir, ".kappal")
-	k3sManager, err := k3s.NewManager(workspaceDir)
+	k3sManager, err := k3s.NewManager(workspaceDir, project.Name)
 	if err != nil {
 		return fmt.Errorf("failed to create K3s manager: %w", err)
 	}

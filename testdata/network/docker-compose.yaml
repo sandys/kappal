@@ -7,4 +7,4 @@ services:
     image: busybox:latest
     command: ["sh", "-c", "while true; do printf 'HTTP/1.1 200 OK\r\n\r\nOK' | nc -l -p 8080; done"]
     ports:
-      - "8080:8080"
+      - "8082:8080"

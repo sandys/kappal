@@ -15,8 +15,9 @@ echo ""
 echo "=== Running simple test ==="
 cd "$PROJECT_DIR/testdata/simple"
 
-# Clean up any existing
-docker rm -f kappal-k3s 2>/dev/null || true
+# Clean up any existing kappal containers and networks
+docker ps -a --filter "name=kappal-" -q | xargs -r docker rm -f 2>/dev/null || true
+docker network ls --filter "name=kappal-" -q | xargs -r docker network rm 2>/dev/null || true
 
 # Run setup first
 echo ""

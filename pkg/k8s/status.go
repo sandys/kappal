@@ -23,6 +23,11 @@ func (c *Client) GetServiceStatuses(ctx context.Context, project *types.Project)
 	var statuses []ServiceStatus
 
 	for _, svc := range project.Services {
+		// Skip services with profiles (not activated by default)
+		if len(svc.Profiles) > 0 {
+			continue
+		}
+
 		status := ServiceStatus{
 			Name:   svc.Name,
 			Status: "Not Found",

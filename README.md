@@ -2,7 +2,7 @@
 
 **Docker Compose CLI for Kubernetes** - Run your `docker-compose.yaml` on Kubernetes without learning Kubernetes.
 
-[![Conformance Tests](https://img.shields.io/badge/conformance-8%2F8%20passing-brightgreen)]()
+[![Conformance Tests](https://img.shields.io/badge/conformance-11%2F11%20passing-brightgreen)]()
 
 ## The Name
 
@@ -31,6 +31,33 @@ kappal down                     # Stop services
 - **Scaling** - Use `deploy.replicas` to scale services
 - **Network Isolation** - Define networks to isolate service groups
 - **UDP Support** - Full protocol support including UDP ports
+- **Dependency Ordering** - `depends_on` with `service_completed_successfully` for Jobs
+- **One-Shot Services** - `restart: "no"` runs as K8s Jobs (migrations, seeds, etc.)
+- **Profiles** - Services with `profiles` excluded from default `up`
+
+## Dependency Ordering & One-Shot Services
+
+Kappal supports `depends_on` with `service_completed_successfully`, letting you run migrations, seeds, and setup tasks that must finish before dependent services start.
+
+```yaml
+services:
+  migrate:
+    image: myapp:latest
+    command: ["./migrate", "up"]
+    restart: "no"                    # Runs as a K8s Job (exits when done)
+
+  app:
+    image: myapp:latest
+    depends_on:
+      migrate:
+        condition: service_completed_successfully  # Waits for migrate to finish
+```
+
+**How it works:**
+
+- Services with `restart: "no"` become Kubernetes Jobs (not Deployments), so they run once and stop cleanly instead of restarting in a loop.
+- When a service depends on a Job with `condition: service_completed_successfully`, Kappal injects an init container that waits for the Job to complete before starting the dependent service.
+- Services with `profiles` are excluded from `kappal up` by default, matching Docker Compose behavior.
 
 ## Prerequisites
 
@@ -125,7 +152,9 @@ kappal down -v
 | Command | ✅ | `command: ["npm", "start"]` |
 | Entrypoint | ✅ | `entrypoint: ["/docker-entrypoint.sh"]` |
 | UDP ports | ✅ | `ports: ["53:53/udp"]` |
-| Depends On | ⚠️ | Partial (ordering only) |
+| Depends On | ✅ | `depends_on: {db: {condition: service_completed_successfully}}` |
+| One-Shot Services (Jobs) | ✅ | `restart: "no"` runs as a K8s Job |
+| Profiles | ✅ | `profiles: [debug]` excluded from default `up` |
 | Healthchecks | 🚧 | Planned |
 
 ## Examples
@@ -219,7 +248,7 @@ make docker-build
 # Run unit tests
 make test
 
-# Run conformance tests (all 8 must pass)
+# Run conformance tests (all 11 must pass)
 make conformance
 
 # Run all lints
@@ -228,7 +257,7 @@ make lint-all
 
 ### Conformance Tests
 
-Kappal passes all 8 conformance tests based on the [compose-spec](https://github.com/compose-spec/compose-spec):
+Kappal passes all 11 conformance tests based on the [compose-spec](https://github.com/compose-spec/compose-spec):
 
 - SimpleLifecycle - Basic up/down
 - SimpleNetwork - Service-to-service DNS
@@ -238,6 +267,9 @@ Kappal passes all 8 conformance tests based on the [compose-spec](https://github
 - UdpPort - UDP protocol support
 - Scaling - Replica scaling
 - DifferentNetworks - Network isolation
+- JobLifecycle - One-shot services run as Jobs and complete
+- DependencyOrdering - `service_completed_successfully` ordering via init containers
+- ProfileExclusion - Profiled services excluded from default `up`
 
 ## FAQ
 

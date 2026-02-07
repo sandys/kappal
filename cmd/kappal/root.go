@@ -73,4 +73,5 @@ func init() {
 	rootCmd.AddCommand(logsCmd)
 	rootCmd.AddCommand(execCmd)
 	rootCmd.AddCommand(ejectCmd)
+	rootCmd.AddCommand(inspectCmd)
 }

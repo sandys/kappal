@@ -112,7 +112,7 @@ func TestCommandVsArgsMapping(t *testing.T) {
 		}
 
 		transformer := &Transformer{workingDir: "/tmp"}
-		deployment := transformer.generateDeployment("test", "postgres", svc)
+		deployment := transformer.generateDeployment("test", "postgres", svc, nil)
 
 		// Should have args, not command (to preserve entrypoint)
 		if strings.Contains(deployment, "        command:") {
@@ -134,7 +134,7 @@ func TestCommandVsArgsMapping(t *testing.T) {
 		}
 
 		transformer := &Transformer{workingDir: "/tmp"}
-		deployment := transformer.generateDeployment("test", "myapp", svc)
+		deployment := transformer.generateDeployment("test", "myapp", svc, nil)
 
 		// Should have both command (from entrypoint) and args (from command)
 		if !strings.Contains(deployment, "        command:") {
@@ -154,7 +154,7 @@ func TestCommandVsArgsMapping(t *testing.T) {
 		}
 
 		transformer := &Transformer{workingDir: "/tmp"}
-		deployment := transformer.generateDeployment("test", "nginx", svc)
+		deployment := transformer.generateDeployment("test", "nginx", svc, nil)
 
 		// Should have neither command nor args
 		if strings.Contains(deployment, "        command:") {
@@ -164,4 +164,28 @@ func TestCommandVsArgsMapping(t *testing.T) {
 			t.Error("should not have args when command not specified")
 		}
 	})
+}
+
+func TestServicePortUsesTargetNotPublished(t *testing.T) {
+	// When published port differs from target port, the K8s Service should use
+	// the target (container) port for both port and targetPort.
+	// The published (host) port is handled by Docker port bindings on the K3s container.
+	svc := ServiceSpec{
+		Image: "nginx:latest",
+		Ports: []PortSpec{{Target: 8080, Published: 8082, Protocol: "tcp"}},
+	}
+
+	transformer := &Transformer{workingDir: "/tmp"}
+	service := transformer.generateService("test", "web", svc)
+
+	// Should contain port: 8080 (target), NOT port: 8082 (published)
+	if !strings.Contains(service, "port: 8080") {
+		t.Error("K8s Service port should use target port (8080), not published port")
+	}
+	if strings.Contains(service, "port: 8082") {
+		t.Error("K8s Service port should NOT use published port (8082)")
+	}
+	if !strings.Contains(service, "targetPort: 8080") {
+		t.Error("K8s Service targetPort should use target port (8080)")
+	}
 }

@@ -72,11 +72,35 @@ func runUp(cmd *cobra.Command, args []string) error {
 	fmt.Println("Generated Kappal workspace in .kappal/")
 
 	// Ensure K3s is running (ONLY Docker command - starts the container)
-	k3sManager, err := k3s.NewManager(workspaceDir)
+	k3sManager, err := k3s.NewManager(workspaceDir, project.Name)
 	if err != nil {
 		return fmt.Errorf("failed to create K3s manager: %w", err)
 	}
 	defer func() { _ = k3sManager.Close() }()
+
+	// Extract published ports from compose project for K3s port forwarding
+	var ports []k3s.PublishedPort
+	for _, svc := range project.Services {
+		if len(svc.Profiles) > 0 {
+			continue
+		}
+		for _, p := range svc.Ports {
+			published := p.Target
+			if p.Published != "" {
+				fmt.Sscanf(p.Published, "%d", &published)
+			}
+			proto := p.Protocol
+			if proto == "" {
+				proto = "tcp"
+			}
+			ports = append(ports, k3s.PublishedPort{
+				HostPort:      uint32(published),
+				ContainerPort: uint32(p.Target),
+				Protocol:      proto,
+			})
+		}
+	}
+	k3sManager.SetPublishedPorts(ports)
 
 	if err := k3sManager.EnsureRunning(ctx); err != nil {
 		return fmt.Errorf("failed to start K3s: %w", err)
@@ -87,6 +111,9 @@ func runUp(cmd *cobra.Command, args []string) error {
 	// Build images if requested
 	if upBuild {
 		for _, svc := range project.Services {
+			if len(svc.Profiles) > 0 {
+				continue
+			}
 			if svc.Build != nil {
 				fmt.Printf("Building %s...\n", svc.Name)
 				dockerfile := ""
@@ -100,6 +127,39 @@ func runUp(cmd *cobra.Command, args []string) error {
 				}
 			}
 		}
+	}
+
+	// Load kappal init image into K3s if any service has Job dependencies
+	// (needed for init containers that wait for job completion)
+	hasJobDeps := false
+	for _, svc := range project.Services {
+		if len(svc.Profiles) > 0 {
+			continue
+		}
+		for depName, depConfig := range svc.DependsOn {
+			if depConfig.Condition == "service_completed_successfully" {
+				// Check if the dependency is a Job (restart: "no")
+				if depSvc, ok := project.Services[depName]; ok && depSvc.Restart == "no" {
+					hasJobDeps = true
+					break
+				}
+			}
+		}
+		if hasJobDeps {
+			break
+		}
+	}
+	if hasJobDeps {
+		if err := k3sManager.LoadInitImage(ctx, transform.KappalInitImage); err != nil {
+			fmt.Fprintf(os.Stderr, "Warning: could not pre-load init image: %v\n", err)
+		}
+	}
+
+	// Delete existing Jobs before re-applying (Jobs are immutable in K8s)
+	deleteCtx, deleteCancel := context.WithTimeout(ctx, 10*time.Second)
+	defer deleteCancel()
+	if k8sClient, err := k8s.NewClient(kubeconfigPath); err == nil {
+		_ = k8sClient.DeleteJobs(deleteCtx, project.Name)
 	}
 
 	// Apply manifests via Tanka/kubectl (uses kubeconfig, NOT docker exec)

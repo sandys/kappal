@@ -25,7 +25,8 @@ integration: docker-build
 # Clean up
 clean:
 	rm -f kappal
-	docker rm -f kappal-k3s 2>/dev/null || true
+	docker ps -a --filter "name=kappal-" -q | xargs -r docker rm -f 2>/dev/null || true
+	docker network ls --filter "name=kappal-" -q | xargs -r docker network rm 2>/dev/null || true
 	docker rmi kappal:latest kappal-builder 2>/dev/null || true
 
 # Quick dev iteration - build and test simple compose file

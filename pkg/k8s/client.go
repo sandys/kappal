@@ -6,6 +6,8 @@ import (
 	"io"
 	"time"
 
+	appsv1 "k8s.io/api/apps/v1"
+	batchv1 "k8s.io/api/batch/v1"
 	corev1 "k8s.io/api/core/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/watch"
@@ -103,15 +105,22 @@ func (c *Client) WaitForPodsReady(ctx context.Context, namespace, labelSelector 
 
 		allReady := true
 		for _, pod := range pods.Items {
-			if pod.Status.Phase != corev1.PodRunning {
-				allReady = false
-				break
-			}
-			for _, cond := range pod.Status.Conditions {
-				if cond.Type == corev1.PodReady && cond.Status != corev1.ConditionTrue {
-					allReady = false
-					break
+			switch pod.Status.Phase {
+			case corev1.PodSucceeded:
+				continue // Job completed successfully, counts as ready
+			case corev1.PodRunning:
+				// Check Ready condition
+				for _, cond := range pod.Status.Conditions {
+					if cond.Type == corev1.PodReady && cond.Status != corev1.ConditionTrue {
+						allReady = false
+						break
+					}
 				}
+			default:
+				allReady = false
+			}
+			if !allReady {
+				break
 			}
 		}
 
@@ -125,7 +134,38 @@ func (c *Client) WaitForPodsReady(ctx context.Context, namespace, labelSelector 
 	return fmt.Errorf("timeout waiting for pods to be ready")
 }
 
+// DeleteJobs deletes all Jobs in a namespace with the kappal project label.
+// Jobs are immutable in K8s, so they must be deleted before re-applying.
+func (c *Client) DeleteJobs(ctx context.Context, namespace string) error {
+	propagation := metav1.DeletePropagationBackground
+	return c.clientset.BatchV1().Jobs(namespace).DeleteCollection(ctx,
+		metav1.DeleteOptions{PropagationPolicy: &propagation},
+		metav1.ListOptions{LabelSelector: "kappal.io/project=" + namespace},
+	)
+}
+
 // GetNodes returns the list of nodes in the cluster
 func (c *Client) GetNodes(ctx context.Context) (*corev1.NodeList, error) {
 	return c.clientset.CoreV1().Nodes().List(ctx, metav1.ListOptions{})
+}
+
+// ListServices returns services matching the given label selector in a namespace
+func (c *Client) ListServices(ctx context.Context, namespace, labelSelector string) (*corev1.ServiceList, error) {
+	return c.clientset.CoreV1().Services(namespace).List(ctx, metav1.ListOptions{
+		LabelSelector: labelSelector,
+	})
+}
+
+// ListDeployments returns deployments matching the given label selector in a namespace
+func (c *Client) ListDeployments(ctx context.Context, namespace, labelSelector string) (*appsv1.DeploymentList, error) {
+	return c.clientset.AppsV1().Deployments(namespace).List(ctx, metav1.ListOptions{
+		LabelSelector: labelSelector,
+	})
+}
+
+// ListJobs returns jobs matching the given label selector in a namespace
+func (c *Client) ListJobs(ctx context.Context, namespace, labelSelector string) (*batchv1.JobList, error) {
+	return c.clientset.BatchV1().Jobs(namespace).List(ctx, metav1.ListOptions{
+		LabelSelector: labelSelector,
+	})
 }

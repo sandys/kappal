@@ -14,7 +14,8 @@ NC='\033[0m'
 
 cleanup() {
     echo "Cleaning up..."
-    docker rm -f kappal-k3s 2>/dev/null || true
+    docker ps -a --filter "name=kappal-" -q | xargs -r docker rm -f 2>/dev/null || true
+    docker network ls --filter "name=kappal-" -q | xargs -r docker network rm 2>/dev/null || true
 }
 
 trap cleanup EXIT
@@ -47,7 +48,7 @@ _internal_kubectl() {
         kubectl --kubeconfig="$kubeconfig" "$@" 2>/dev/null
     else
         # Fallback to docker exec if kubeconfig not available locally
-        docker exec kappal-k3s kubectl "$@" 2>/dev/null
+        docker exec "kappal-$(basename "$PWD")-k3s" kubectl "$@" 2>/dev/null
     fi
 }
 
@@ -93,11 +94,18 @@ else
     exit 1
 fi
 
+# Dynamically look up the host port via kappal inspect
+HOST_PORT=$(kappal inspect | jq -r '.services[] | select(.name=="web") | .ports[] | select(.container==80) | .host')
+if [ -z "$HOST_PORT" ] || [ "$HOST_PORT" = "null" ]; then
+    echo -e "${RED}FAIL${NC}: Could not determine host port from kappal inspect"
+    exit 1
+fi
+
 # Test that we can reach the nginx
-if curl -s http://localhost:8080 | grep -q "nginx"; then
-    echo -e "${GREEN}PASS${NC}: Service is accessible on port 8080"
+if curl -s "http://localhost:$HOST_PORT" | grep -q "nginx"; then
+    echo -e "${GREEN}PASS${NC}: Service is accessible on port $HOST_PORT"
 else
-    echo -e "${RED}FAIL${NC}: Service not accessible"
+    echo -e "${RED}FAIL${NC}: Service not accessible on port $HOST_PORT"
     exit 1
 fi
 
@@ -145,6 +153,33 @@ else
 fi
 
 kappal down -v
+
+echo ""
+echo "=== Test 4: Job Lifecycle ==="
+cd "$PROJECT_DIR/testdata/jobs"
+cleanup
+
+kappal up -d
+sleep 20
+
+# Jobs should complete, app should be running
+if kappal ps | grep -q "app.*Up"; then
+    echo -e "${GREEN}PASS${NC}: App service running after job dependencies"
+else
+    echo -e "${RED}FAIL${NC}: App service not running"
+    kappal ps
+    exit 1
+fi
+
+# Profiled service should not appear
+if kappal ps 2>/dev/null | grep -q "tools"; then
+    echo -e "${RED}FAIL${NC}: Profiled service should not start"
+    exit 1
+fi
+echo -e "${GREEN}PASS${NC}: Profiled service correctly excluded"
+
+kappal down -v
+echo -e "${GREEN}PASS${NC}: Job lifecycle completed"
 
 echo ""
 echo "=== All tests completed! ==="

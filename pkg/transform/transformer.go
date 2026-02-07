@@ -54,6 +54,15 @@ type ComposeSpec struct {
 	Configs  map[string]ConfigSpec     `json:"configs,omitempty"`
 }
 
+// DependsOnSpec represents a dependency with its condition
+type DependsOnSpec struct {
+	Service   string `json:"service"`
+	Condition string `json:"condition,omitempty"`
+}
+
+// KappalInitImage is the image used for init containers that wait for Job dependencies
+const KappalInitImage = "ghcr.io/sandys/kappal:latest"
+
 // ServiceSpec represents a compose service
 type ServiceSpec struct {
 	Image       string            `json:"image,omitempty"`
@@ -62,7 +71,7 @@ type ServiceSpec struct {
 	Environment []EnvSpec         `json:"environment,omitempty"`
 	Volumes     []VolumeMount     `json:"volumes,omitempty"`
 	Networks    []string          `json:"networks,omitempty"`
-	DependsOn   []string          `json:"depends_on,omitempty"`
+	DependsOn   []DependsOnSpec   `json:"depends_on,omitempty"`
 	Command     []string          `json:"command,omitempty"`
 	Entrypoint  []string          `json:"entrypoint,omitempty"`
 	Replicas    int               `json:"replicas,omitempty"`
@@ -71,6 +80,7 @@ type ServiceSpec struct {
 	HealthCheck *HealthCheckSpec  `json:"healthcheck,omitempty"`
 	Labels      map[string]string `json:"labels,omitempty"`
 	Restart     string            `json:"restart,omitempty"`
+	IsJob       bool              `json:"is_job,omitempty"`
 }
 
 type BuildSpec struct {
@@ -154,11 +164,17 @@ func (t *Transformer) ToSpec() *ComposeSpec {
 
 	// Convert services
 	for _, svc := range t.project.Services {
+		// Skip services with profiles (not activated by default)
+		if len(svc.Profiles) > 0 {
+			continue
+		}
+
 		svcSpec := ServiceSpec{
 			Image:    svc.Image,
 			Replicas: 1,
 			Labels:   svc.Labels,
 			Restart:  svc.Restart,
+			IsJob:    svc.Restart == "no",
 		}
 
 		// Build context
@@ -219,9 +235,16 @@ func (t *Transformer) ToSpec() *ComposeSpec {
 			svcSpec.Networks = append(svcSpec.Networks, name)
 		}
 
-		// Dependencies
-		for dep := range svc.DependsOn {
-			svcSpec.DependsOn = append(svcSpec.DependsOn, dep)
+		// Dependencies with conditions
+		for dep, config := range svc.DependsOn {
+			condition := config.Condition
+			if condition == "" {
+				condition = "service_started"
+			}
+			svcSpec.DependsOn = append(svcSpec.DependsOn, DependsOnSpec{
+				Service:   dep,
+				Condition: condition,
+			})
 		}
 
 		// Command
@@ -517,11 +540,32 @@ spec:
 		manifests = append(manifests, npManifest)
 	}
 
-	// Generate Deployments and Services for each service
-	// Services are created for ALL deployments to enable DNS resolution,
+	// Generate RBAC if any service depends on a Job completing
+	hasJobDependency := false
+	for _, svc := range spec.Services {
+		for _, dep := range svc.DependsOn {
+			if dep.Condition == "service_completed_successfully" {
+				hasJobDependency = true
+				break
+			}
+		}
+		if hasJobDependency {
+			break
+		}
+	}
+	if hasJobDependency {
+		manifests = append(manifests, t.generateJobReaderRBAC(spec.Name))
+	}
+
+	// Generate Deployments/Jobs and Services for each service
+	// Services are created for ALL resources to enable DNS resolution,
 	// not just those with published ports
 	for name, svc := range spec.Services {
-		manifests = append(manifests, t.generateDeployment(spec.Name, name, svc))
+		if svc.IsJob {
+			manifests = append(manifests, t.generateJob(spec.Name, name, svc, spec.Services))
+		} else {
+			manifests = append(manifests, t.generateDeployment(spec.Name, name, svc, spec.Services))
+		}
 		manifests = append(manifests, t.generateService(spec.Name, name, svc))
 	}
 
@@ -530,12 +574,15 @@ spec:
 	return ws.WriteManifest("all.yaml", []byte(combined))
 }
 
-func (t *Transformer) generateDeployment(projectName, serviceName string, svc ServiceSpec) string {
-	replicas := svc.Replicas
-	if replicas < 1 {
-		replicas = 1
-	}
+// containerSpecParts holds the reusable parts of a container/pod spec
+type containerSpecParts struct {
+	containerSpec string
+	volumeSpec    string
+	labels        string
+}
 
+// buildContainerSpec extracts the shared container spec building logic
+func (t *Transformer) buildContainerSpec(projectName, serviceName string, svc ServiceSpec) containerSpecParts {
 	// Build labels with optional network label
 	labels := fmt.Sprintf(`        kappal.io/project: "%s"
         kappal.io/service: "%s"`, projectName, serviceName)
@@ -544,7 +591,6 @@ func (t *Transformer) generateDeployment(projectName, serviceName string, svc Se
         kappal.io/network: "%s"`, svc.Networks[0])
 	}
 
-	// Build container spec parts
 	var containerParts []string
 
 	// Ports
@@ -578,7 +624,7 @@ func (t *Transformer) generateDeployment(projectName, serviceName string, svc Se
 		containerParts = append(containerParts, "        command:\n"+strings.Join(cmdLines, "\n"))
 	}
 
-	// Command -> K8s args (replaces CMD, passed to entrypoint)
+	// Command -> K8s args (passed to entrypoint)
 	if len(svc.Command) > 0 {
 		var argLines []string
 		for _, c := range svc.Command {
@@ -591,7 +637,6 @@ func (t *Transformer) generateDeployment(projectName, serviceName string, svc Se
 	var volumeMountLines []string
 	var volumeLines []string
 
-	// Regular volumes
 	for i, v := range svc.Volumes {
 		volName := fmt.Sprintf("vol-%d", i)
 		mountLine := fmt.Sprintf("        - name: %s\n          mountPath: \"%s\"", volName, v.Target)
@@ -602,7 +647,6 @@ func (t *Transformer) generateDeployment(projectName, serviceName string, svc Se
 
 		switch v.Type {
 		case "volume", "":
-			// Sanitize volume name for PVC reference
 			pvcName := sanitizeName(v.Source)
 			volumeLines = append(volumeLines, fmt.Sprintf("      - name: %s\n        persistentVolumeClaim:\n          claimName: %s", volName, pvcName))
 		case "bind":
@@ -616,14 +660,12 @@ func (t *Transformer) generateDeployment(projectName, serviceName string, svc Se
 		if target == "" {
 			target = s.Source
 		}
-		// Build mount path - if target already has /run/secrets/, use it directly
 		mountPath := target
 		if !strings.HasPrefix(target, "/run/secrets/") {
 			mountPath = "/run/secrets/" + target
 		}
 		k8sSecretName := sanitizeName(s.Source)
 		volName := fmt.Sprintf("secret-%s", k8sSecretName)
-		// subPath must match the key in the secret data (original name)
 		volumeMountLines = append(volumeMountLines, fmt.Sprintf("        - name: %s\n          mountPath: \"%s\"\n          subPath: %s\n          readOnly: true", volName, mountPath, s.Source))
 		volumeLines = append(volumeLines, fmt.Sprintf("      - name: %s\n        secret:\n          secretName: %s", volName, k8sSecretName))
 	}
@@ -636,7 +678,6 @@ func (t *Transformer) generateDeployment(projectName, serviceName string, svc Se
 		}
 		k8sConfigName := sanitizeName(c.Source)
 		volName := fmt.Sprintf("config-%s", k8sConfigName)
-		// subPath must match the key in the configmap data (original name)
 		volumeMountLines = append(volumeMountLines, fmt.Sprintf("        - name: %s\n          mountPath: \"%s\"\n          subPath: %s\n          readOnly: true", volName, target, c.Source))
 		volumeLines = append(volumeLines, fmt.Sprintf("      - name: %s\n        configMap:\n          name: %s", volName, k8sConfigName))
 	}
@@ -655,17 +696,64 @@ func (t *Transformer) generateDeployment(projectName, serviceName string, svc Se
 		volumeSpec = "\n      volumes:\n" + strings.Join(volumeLines, "\n")
 	}
 
-	// Add security context for pods with persistent volumes
-	// Note: We do NOT add initContainers or special handling for postgres because
-	// the postgres entrypoint handles privilege dropping correctly when we preserve
-	// the original entrypoint (by mapping compose command -> k8s args, not command)
+	return containerSpecParts{
+		containerSpec: containerSpec,
+		volumeSpec:    volumeSpec,
+		labels:        labels,
+	}
+}
+
+// buildInitContainerSpec generates the init container YAML for waiting on Job dependencies
+func (t *Transformer) buildInitContainerSpec(projectName string, svc ServiceSpec, allServices map[string]ServiceSpec) string {
+	var waitForJobs []string
+	for _, dep := range svc.DependsOn {
+		if dep.Condition == "service_completed_successfully" {
+			if depSvc, ok := allServices[dep.Service]; ok && depSvc.IsJob {
+				waitForJobs = append(waitForJobs, dep.Service)
+			}
+		}
+	}
+
+	if len(waitForJobs) == 0 {
+		return ""
+	}
+
+	jobsJSON := `[`
+	for i, j := range waitForJobs {
+		if i > 0 {
+			jobsJSON += ","
+		}
+		jobsJSON += fmt.Sprintf(`"%s"`, j)
+	}
+	jobsJSON += `]`
+
+	specJSON := fmt.Sprintf(`{"namespace":"%s","waitForJobs":%s}`, projectName, jobsJSON)
+
+	return fmt.Sprintf(`
+      initContainers:
+      - name: wait-for-deps
+        image: %s
+        imagePullPolicy: IfNotPresent
+        command: ["kappal-init"]
+        env:
+        - name: KAPPAL_INIT_SPEC
+          value: '%s'`, KappalInitImage, specJSON)
+}
+
+func (t *Transformer) generateDeployment(projectName, serviceName string, svc ServiceSpec, allServices map[string]ServiceSpec) string {
+	replicas := svc.Replicas
+	if replicas < 1 {
+		replicas = 1
+	}
+
+	parts := t.buildContainerSpec(projectName, serviceName, svc)
+
 	securityContextSpec := ""
-	initContainerSpec := ""
-	containerSecurityContext := ""
 	if len(svc.Volumes) > 0 {
-		// Use fsGroup to allow container user to write to volumes
 		securityContextSpec = "\n      securityContext:\n        fsGroup: 999"
 	}
+
+	initContainerSpec := t.buildInitContainerSpec(projectName, svc, allServices)
 
 	return fmt.Sprintf(`---
 apiVersion: apps/v1
@@ -690,9 +778,75 @@ spec:
       containers:
       - name: %s
         image: %s
-        imagePullPolicy: IfNotPresent%s%s%s`, serviceName, projectName, projectName, serviceName, replicas,
-		projectName, serviceName, labels, securityContextSpec, initContainerSpec,
-		serviceName, svc.Image, containerSecurityContext, containerSpec, volumeSpec)
+        imagePullPolicy: IfNotPresent%s%s`, serviceName, projectName, projectName, serviceName, replicas,
+		projectName, serviceName, parts.labels, securityContextSpec, initContainerSpec,
+		serviceName, svc.Image, parts.containerSpec, parts.volumeSpec)
+}
+
+func (t *Transformer) generateJob(projectName, serviceName string, svc ServiceSpec, allServices map[string]ServiceSpec) string {
+	parts := t.buildContainerSpec(projectName, serviceName, svc)
+
+	securityContextSpec := ""
+	if len(svc.Volumes) > 0 {
+		securityContextSpec = "\n      securityContext:\n        fsGroup: 999"
+	}
+
+	initContainerSpec := t.buildInitContainerSpec(projectName, svc, allServices)
+
+	return fmt.Sprintf(`---
+apiVersion: batch/v1
+kind: Job
+metadata:
+  name: %s
+  namespace: %s
+  labels:
+    kappal.io/project: "%s"
+    kappal.io/service: "%s"
+spec:
+  backoffLimit: 3
+  template:
+    metadata:
+      labels:
+%s
+    spec:
+      restartPolicy: Never%s%s
+      containers:
+      - name: %s
+        image: %s
+        imagePullPolicy: IfNotPresent%s%s`, serviceName, projectName, projectName, serviceName,
+		parts.labels, securityContextSpec, initContainerSpec,
+		serviceName, svc.Image, parts.containerSpec, parts.volumeSpec)
+}
+
+func (t *Transformer) generateJobReaderRBAC(projectName string) string {
+	return fmt.Sprintf(`---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: Role
+metadata:
+  name: kappal-job-reader
+  namespace: %s
+  labels:
+    kappal.io/project: "%s"
+rules:
+- apiGroups: ["batch"]
+  resources: ["jobs"]
+  verbs: ["get", "list", "watch"]
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: RoleBinding
+metadata:
+  name: kappal-job-reader
+  namespace: %s
+  labels:
+    kappal.io/project: "%s"
+subjects:
+- kind: ServiceAccount
+  name: default
+  namespace: %s
+roleRef:
+  kind: Role
+  name: kappal-job-reader
+  apiGroup: rbac.authorization.k8s.io`, projectName, projectName, projectName, projectName, projectName)
 }
 
 // getDefaultPort returns the default port for well-known images
@@ -728,19 +882,18 @@ func (t *Transformer) generateService(projectName, serviceName string, svc Servi
 
 	if hasExternalPorts {
 		// Use explicitly defined ports
+		// K8s Service port and targetPort both use the container's target port.
+		// The published (host) port is handled by Docker port bindings on the K3s container,
+		// not by the K8s Service. Port chain: Host:published → K3s:target → ServiceLB:target → Pod:target
 		for i, p := range svc.Ports {
 			protocol := strings.ToUpper(p.Protocol)
 			if protocol == "" {
 				protocol = "TCP"
 			}
-			published := p.Published
-			if published == 0 {
-				published = p.Target
-			}
 			portItems = append(portItems, fmt.Sprintf(`  - name: port-%d
     port: %d
     targetPort: %d
-    protocol: %s`, i, published, p.Target, protocol))
+    protocol: %s`, i, p.Target, p.Target, protocol))
 		}
 	} else {
 		// No explicit ports - try to infer from image for internal service discovery

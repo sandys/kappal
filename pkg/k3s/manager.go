@@ -3,34 +3,54 @@ package k3s
 import (
 	"context"
 	"crypto/sha256"
+	"encoding/binary"
 	"encoding/hex"
 	"fmt"
 	"io"
+	"net"
 	"os"
 	"path/filepath"
+	"regexp"
+	"strings"
 	"time"
 
 	"github.com/docker/docker/api/types/container"
 	"github.com/docker/docker/api/types/mount"
+	"github.com/docker/go-connections/nat"
 	"github.com/kappal-app/kappal/pkg/docker"
 	"github.com/kappal-app/kappal/pkg/k8s"
 )
 
 const (
-	K3sImage      = "docker.io/rancher/k3s:v1.29.0-k3s1"
-	ContainerName = "kappal-k3s"
+	K3sImage = "docker.io/rancher/k3s:v1.29.0-k3s1"
 )
+
+// PublishedPort represents a port to publish from the K3s container to the host.
+type PublishedPort struct {
+	HostPort      uint32
+	ContainerPort uint32
+	Protocol      string // "tcp" or "udp"
+}
 
 // Manager handles K3s lifecycle only (Docker start/stop)
 // All Kubernetes operations go through client-go after K3s is running
 type Manager struct {
-	workspaceDir string
-	runtimeDir   string
-	docker       *docker.Client
+	workspaceDir   string
+	runtimeDir     string
+	projectName    string
+	publishedPorts []PublishedPort
+	docker         *docker.Client
 }
 
-// NewManager creates a new K3s manager
-func NewManager(workspaceDir string) (*Manager, error) {
+var sanitizeRe = regexp.MustCompile(`[^a-zA-Z0-9_.-]`)
+
+// sanitize replaces invalid Docker name characters with dashes.
+func sanitize(name string) string {
+	return sanitizeRe.ReplaceAllString(name, "-")
+}
+
+// NewManager creates a new K3s manager for the given project.
+func NewManager(workspaceDir string, projectName string) (*Manager, error) {
 	dockerClient, err := docker.NewClient()
 	if err != nil {
 		return nil, fmt.Errorf("failed to create docker client: %w", err)
@@ -38,8 +58,43 @@ func NewManager(workspaceDir string) (*Manager, error) {
 	return &Manager{
 		workspaceDir: workspaceDir,
 		runtimeDir:   filepath.Join(workspaceDir, "runtime"),
+		projectName:  projectName,
 		docker:       dockerClient,
 	}, nil
+}
+
+// SetPublishedPorts sets the compose service ports to publish on the K3s container.
+// Must be called before EnsureRunning.
+func (m *Manager) SetPublishedPorts(ports []PublishedPort) {
+	m.publishedPorts = ports
+}
+
+// containerName returns the Docker container name for this project's K3s instance.
+func (m *Manager) containerName() string {
+	return fmt.Sprintf("kappal-%s-k3s", sanitize(m.projectName))
+}
+
+// ContainerName returns the Docker container name (exported for inspect).
+func (m *Manager) ContainerName() string {
+	return m.containerName()
+}
+
+// networkName returns the Docker bridge network name for this project.
+func (m *Manager) networkName() string {
+	return fmt.Sprintf("kappal-%s-net", sanitize(m.projectName))
+}
+
+// NetworkName returns the Docker bridge network name (exported for inspect).
+func (m *Manager) NetworkName() string {
+	return m.networkName()
+}
+
+// apiHostPort returns a deterministic host port for the K3s API server,
+// derived from the project name. Range: 16443–26442.
+func (m *Manager) apiHostPort() uint32 {
+	h := sha256.Sum256([]byte(m.projectName))
+	offset := binary.BigEndian.Uint16(h[:2]) % 10000
+	return 16443 + uint32(offset)
 }
 
 // Close closes the Docker client
@@ -77,28 +132,145 @@ func (m *Manager) GetRuntimeDir() string {
 	return m.runtimeDir
 }
 
-// EnsureRunning starts K3s if not already running
+// buildExpectedPortBindings constructs the expected nat.PortMap for the current config.
+func (m *Manager) buildExpectedPortBindings() nat.PortMap {
+	portBindings := nat.PortMap{}
+
+	// API port
+	apiPort, _ := nat.NewPort("tcp", "6443")
+	portBindings[apiPort] = []nat.PortBinding{
+		{HostIP: "0.0.0.0", HostPort: fmt.Sprintf("%d", m.apiHostPort())},
+	}
+
+	// Compose published ports
+	for _, p := range m.publishedPorts {
+		proto := p.Protocol
+		if proto == "" {
+			proto = "tcp"
+		}
+		containerPort, _ := nat.NewPort(proto, fmt.Sprintf("%d", p.ContainerPort))
+		portBindings[containerPort] = []nat.PortBinding{
+			{HostIP: "0.0.0.0", HostPort: fmt.Sprintf("%d", p.HostPort)},
+		}
+	}
+
+	return portBindings
+}
+
+// portBindingsMatch checks if the running container's ports match the expected config.
+func portBindingsMatch(running, expected nat.PortMap) bool {
+	if len(running) != len(expected) {
+		return false
+	}
+	for port, expectedBindings := range expected {
+		runningBindings, ok := running[port]
+		if !ok || len(runningBindings) != len(expectedBindings) {
+			return false
+		}
+		for i, eb := range expectedBindings {
+			if runningBindings[i].HostPort != eb.HostPort {
+				return false
+			}
+		}
+	}
+	return true
+}
+
+// EnsureRunning starts K3s if not already running.
+// If the container is running but port bindings have changed, it recreates K3s.
 func (m *Manager) EnsureRunning(ctx context.Context) error {
-	// Check if container exists and its state
-	exists, running, err := m.docker.ContainerState(ctx, ContainerName)
+	containerName := m.containerName()
+
+	exists, running, err := m.docker.ContainerState(ctx, containerName)
 	if err != nil {
 		return err
 	}
 
 	if running {
+		// Check for port binding mismatch
+		currentPorts, err := m.docker.ContainerInspectPorts(ctx, containerName)
+		if err != nil {
+			return fmt.Errorf("failed to inspect container ports: %w", err)
+		}
+
+		expectedPorts := m.buildExpectedPortBindings()
+		if !portBindingsMatch(currentPorts, expectedPorts) {
+			fmt.Println("Port config changed, recreating K3s...")
+			if err := m.docker.ContainerStop(ctx, containerName, 10*time.Second); err != nil {
+				return fmt.Errorf("failed to stop K3s: %w", err)
+			}
+			if err := m.docker.ContainerRemove(ctx, containerName); err != nil {
+				return fmt.Errorf("failed to remove K3s: %w", err)
+			}
+			return m.start(ctx)
+		}
+
 		fmt.Println("K3s already running")
 		return m.waitForReady(ctx)
 	}
 
 	// Remove any existing stopped/dead container before starting fresh
 	if exists {
-		if err := m.docker.ContainerRemove(ctx, ContainerName); err != nil {
+		if err := m.docker.ContainerRemove(ctx, containerName); err != nil {
 			return fmt.Errorf("failed to remove existing container: %w", err)
 		}
 	}
 
 	// Create and start new container
 	return m.start(ctx)
+}
+
+// checkPortAvailability verifies all required ports are free on the host.
+func (m *Manager) checkPortAvailability() error {
+	// Check API port
+	apiPort := m.apiHostPort()
+	if err := checkTCPPort(apiPort); err != nil {
+		return fmt.Errorf("FATAL: K3s API port %d is already in use.\n"+
+			"This port is auto-assigned from your project name. Another kappal project has\n"+
+			"the same assignment. Use -p <different-name> to pick a different project name", apiPort)
+	}
+
+	// Check compose published ports
+	for _, p := range m.publishedPorts {
+		proto := p.Protocol
+		if proto == "" {
+			proto = "tcp"
+		}
+		switch proto {
+		case "tcp":
+			if err := checkTCPPort(p.HostPort); err != nil {
+				return fmt.Errorf("FATAL: Port %d/tcp is already in use.\n"+
+					"Another service is already listening on this port. Change the published port\n"+
+					"in your docker-compose.yaml, or stop the conflicting service", p.HostPort)
+			}
+		case "udp":
+			if err := checkUDPPort(p.HostPort); err != nil {
+				return fmt.Errorf("FATAL: Port %d/udp is already in use.\n"+
+					"Another service is already listening on this port. Change the published port\n"+
+					"in your docker-compose.yaml, or stop the conflicting service", p.HostPort)
+			}
+		}
+	}
+
+	return nil
+}
+
+func checkTCPPort(port uint32) error {
+	ln, err := net.Listen("tcp", fmt.Sprintf(":%d", port))
+	if err != nil {
+		return err
+	}
+	_ = ln.Close()
+	return nil
+}
+
+func checkUDPPort(port uint32) error {
+	ln, err := net.ListenPacket("udp", fmt.Sprintf(":%d", port))
+	if err != nil {
+		return err
+	}
+	_ = ln.Close()
+	return nil
 }
 
 func (m *Manager) start(ctx context.Context) error {
@@ -109,29 +281,52 @@ func (m *Manager) start(ctx context.Context) error {
 		return fmt.Errorf("failed to create runtime directory: %w", err)
 	}
 
+	// Create bridge network for isolation
+	if err := m.docker.NetworkCreate(ctx, m.networkName()); err != nil {
+		return fmt.Errorf("failed to create network: %w", err)
+	}
+
+	// Check port availability before starting
+	if err := m.checkPortAvailability(); err != nil {
+		return err
+	}
+
 	// Use a named Docker volume for K3s data persistence.
-	// This works correctly regardless of whether kappal is running in a container
-	// or on the host, avoiding bind mount path translation issues.
 	k3sDataVolume := m.getK3sDataVolumeName()
+
+	// Build port bindings
+	portBindings := m.buildExpectedPortBindings()
+
+	// Build exposed ports set for container config
+	exposedPorts := nat.PortSet{}
+	for port := range portBindings {
+		exposedPorts[port] = struct{}{}
+	}
 
 	// Build container config
 	config := &container.Config{
-		Image: K3sImage,
+		Hostname: m.containerName(), // Stable hostname ensures K3s node name persists across container recreation
+		Image:    K3sImage,
 		Cmd: []string{
 			"server",
 			"--disable=traefik",
 			"--disable=metrics-server",
+			"--bind-address=0.0.0.0",
+			"--tls-san=0.0.0.0",
+			"--tls-san=127.0.0.1",
 		},
 		Env: []string{
 			"K3S_KUBECONFIG_MODE=644",
 		},
+		ExposedPorts: exposedPorts,
 	}
 
-	// Build host config with privileged mode and host networking
+	// Build host config with privileged mode and bridge networking
 	hostConfig := &container.HostConfig{
 		Privileged:    true,
-		NetworkMode:   "host",
+		NetworkMode:   container.NetworkMode(m.networkName()),
 		RestartPolicy: container.RestartPolicy{Name: "unless-stopped"},
+		PortBindings:  portBindings,
 		Mounts: []mount.Mount{
 			{
 				Type:   mount.TypeVolume,
@@ -141,11 +336,32 @@ func (m *Manager) start(ctx context.Context) error {
 		},
 	}
 
-	if err := m.docker.ContainerRun(ctx, config, hostConfig, ContainerName); err != nil {
+	if err := m.docker.ContainerRunWithNetwork(ctx, config, hostConfig, m.networkName(), m.containerName()); err != nil {
 		return fmt.Errorf("failed to start K3s: %w", err)
 	}
 
 	return m.waitForReady(ctx)
+}
+
+// isInsideDocker returns true if the current process is running inside a Docker container.
+func isInsideDocker() bool {
+	_, err := os.Stat("/.dockerenv")
+	return err == nil
+}
+
+// getSelfContainerID returns the container ID of the current process if running in Docker.
+func getSelfContainerID() string {
+	hostname, err := os.Hostname()
+	if err != nil {
+		return ""
+	}
+	// Docker sets hostname to the short container ID (12 hex chars)
+	if len(hostname) >= 12 {
+		if _, err := hex.DecodeString(hostname[:12]); err == nil {
+			return hostname
+		}
+	}
+	return ""
 }
 
 // waitForReady waits for K3s to be ready and extracts the kubeconfig
@@ -157,14 +373,53 @@ func (m *Manager) waitForReady(ctx context.Context) error {
 		return fmt.Errorf("failed to create runtime directory: %w", err)
 	}
 
+	containerName := m.containerName()
+
+	// Determine the API server address based on execution context
+	// When running inside Docker, connect to K3s via the bridge network (container IP:6443)
+	// When running on the host, use the published port on 127.0.0.1
+	apiHost := "127.0.0.1"
+	apiPort := m.apiHostPort()
+
+	if isInsideDocker() {
+		selfID := getSelfContainerID()
+		if selfID != "" {
+			// Connect our container to the K3s bridge network so we can reach K3s directly
+			if err := m.docker.NetworkConnect(ctx, m.networkName(), selfID); err != nil {
+				fmt.Fprintf(os.Stderr, "\nWarning: could not connect to K3s network: %v\n", err)
+			} else {
+				// Get K3s container's IP on the bridge network
+				ip, err := m.docker.ContainerIPOnNetwork(ctx, containerName, m.networkName())
+				if err == nil && ip != "" {
+					apiHost = ip
+					apiPort = 6443
+				}
+			}
+		}
+	}
+
 	deadline := time.Now().Add(180 * time.Second)
 	for time.Now().Before(deadline) {
 		// Extract kubeconfig using docker exec cat (more reliable than docker cp -)
-		output, err := m.docker.ContainerExec(ctx, ContainerName, []string{"cat", "/etc/rancher/k3s/k3s.yaml"})
+		output, err := m.docker.ContainerExec(ctx, containerName, []string{"cat", "/etc/rancher/k3s/k3s.yaml"})
 		if err == nil && len(output) > 0 {
+			// Patch kubeconfig to use the correct API server address
+			// K3s may output 127.0.0.1 or 0.0.0.0 depending on --bind-address
+			replacement := fmt.Sprintf("https://%s:%d", apiHost, apiPort)
+			patched := strings.ReplaceAll(
+				string(output),
+				"https://127.0.0.1:6443",
+				replacement,
+			)
+			patched = strings.ReplaceAll(
+				patched,
+				"https://0.0.0.0:6443",
+				replacement,
+			)
+
 			// Write kubeconfig to runtime directory
 			kubeconfigPath := m.GetKubeconfigPath()
-			if err := os.WriteFile(kubeconfigPath, output, 0644); err != nil {
+			if err := os.WriteFile(kubeconfigPath, []byte(patched), 0644); err != nil {
 				return fmt.Errorf("failed to write kubeconfig: %w", err)
 			}
 
@@ -189,7 +444,8 @@ func (m *Manager) waitForReady(ctx context.Context) error {
 // Returns nil if container doesn't exist or is already stopped (idempotent)
 // Returns error for Docker infrastructure failures
 func (m *Manager) Stop(ctx context.Context) error {
-	exists, running, err := m.docker.ContainerState(ctx, ContainerName)
+	containerName := m.containerName()
+	exists, running, err := m.docker.ContainerState(ctx, containerName)
 	if err != nil {
 		return fmt.Errorf("failed to check container state: %w", err)
 	}
@@ -197,12 +453,12 @@ func (m *Manager) Stop(ctx context.Context) error {
 	if !exists || !running {
 		return nil
 	}
-	return m.docker.ContainerStop(ctx, ContainerName, 10*time.Second)
+	return m.docker.ContainerStop(ctx, containerName, 10*time.Second)
 }
 
 // Remove removes the K3s container
 func (m *Manager) Remove(ctx context.Context) error {
-	return m.docker.ContainerRemove(ctx, ContainerName)
+	return m.docker.ContainerRemove(ctx, m.containerName())
 }
 
 // BuildImage builds an image and loads it into K3s containerd
@@ -233,8 +489,10 @@ func (m *Manager) BuildImage(ctx context.Context, projectName, serviceName, cont
 	}
 	defer func() { _ = imageTar.Close() }()
 
+	containerName := m.containerName()
+
 	// Import into K3s containerd via docker exec
-	if err := m.docker.ContainerExecStream(ctx, ContainerName,
+	if err := m.docker.ContainerExecStream(ctx, containerName,
 		[]string{"ctr", "images", "import", "-"},
 		imageTar, os.Stdout, os.Stderr); err != nil {
 		return fmt.Errorf("ctr import failed: %w", err)
@@ -243,7 +501,8 @@ func (m *Manager) BuildImage(ctx context.Context, projectName, serviceName, cont
 	return nil
 }
 
-// CleanRuntime removes the runtime directory and the Docker volume for K3s data
+// CleanRuntime removes the runtime directory, the Docker volume for K3s data,
+// and the Docker bridge network.
 func (m *Manager) CleanRuntime() error {
 	ctx := context.Background()
 
@@ -254,12 +513,68 @@ func (m *Manager) CleanRuntime() error {
 		fmt.Printf("Warning: failed to remove volume %s: %v\n", volumeName, err)
 	}
 
+	// Remove the Docker bridge network
+	networkName := m.networkName()
+	if err := m.docker.NetworkRemove(ctx, networkName); err != nil {
+		fmt.Printf("Warning: failed to remove network %s: %v\n", networkName, err)
+	}
+
 	return os.RemoveAll(m.runtimeDir)
 }
 
 // LoadImageFromTar loads an image from a tar reader into K3s containerd
 func (m *Manager) LoadImageFromTar(ctx context.Context, imageTar io.Reader) error {
-	return m.docker.ContainerExecStream(ctx, ContainerName,
+	return m.docker.ContainerExecStream(ctx, m.containerName(),
 		[]string{"ctr", "images", "import", "-"},
 		imageTar, os.Stdout, os.Stderr)
+}
+
+// LoadInitImage builds a minimal init container image from the local kappal-init
+// binary and loads it into K3s containerd. This ensures the init container image
+// always matches the running kappal version, regardless of what's in the registry.
+func (m *Manager) LoadInitImage(ctx context.Context, imageName string) error {
+	// Find kappal-init binary in the current environment
+	kappalInitPath := "/usr/local/bin/kappal-init"
+	if _, err := os.Stat(kappalInitPath); err != nil {
+		// Not available locally; K3s will try to pull from registry
+		return nil
+	}
+
+	// Create temp build context with a minimal Dockerfile
+	tmpDir, err := os.MkdirTemp("", "kappal-init-*")
+	if err != nil {
+		return fmt.Errorf("failed to create temp dir: %w", err)
+	}
+	defer func() { _ = os.RemoveAll(tmpDir) }()
+
+	// Write Dockerfile — scratch is fine since kappal-init is statically linked (CGO_ENABLED=0)
+	dockerfile := "FROM scratch\nCOPY kappal-init /usr/local/bin/kappal-init\nENTRYPOINT [\"/usr/local/bin/kappal-init\"]\n"
+	if err := os.WriteFile(filepath.Join(tmpDir, "Dockerfile"), []byte(dockerfile), 0644); err != nil {
+		return fmt.Errorf("failed to write Dockerfile: %w", err)
+	}
+
+	// Copy the binary into the build context
+	data, err := os.ReadFile(kappalInitPath)
+	if err != nil {
+		return fmt.Errorf("failed to read kappal-init binary: %w", err)
+	}
+	if err := os.WriteFile(filepath.Join(tmpDir, "kappal-init"), data, 0755); err != nil {
+		return fmt.Errorf("failed to write kappal-init to build context: %w", err)
+	}
+
+	// Build the minimal init image
+	if err := m.docker.ImageBuild(ctx, tmpDir, "Dockerfile", imageName, nil); err != nil {
+		return fmt.Errorf("failed to build init image: %w", err)
+	}
+
+	// Save and load into K3s containerd
+	imageTar, err := m.docker.ImageSave(ctx, imageName)
+	if err != nil {
+		return fmt.Errorf("failed to save init image: %w", err)
+	}
+	defer func() { _ = imageTar.Close() }()
+
+	return m.docker.ContainerExecStream(ctx, m.containerName(),
+		[]string{"ctr", "images", "import", "-"},
+		imageTar, io.Discard, os.Stderr)
 }

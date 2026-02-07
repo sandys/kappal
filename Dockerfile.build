@@ -36,6 +36,7 @@ RUN go mod download || true
 COPY . .
 
 # Download dependencies and build
-RUN go mod tidy && go build -o /usr/local/bin/kappal ./cmd/kappal
+RUN go mod tidy && go build -o /usr/local/bin/kappal ./cmd/kappal && \
+    CGO_ENABLED=0 go build -ldflags="-s -w" -o /usr/local/bin/kappal-init ./cmd/kappal-init
 
 ENTRYPOINT ["kappal"]
