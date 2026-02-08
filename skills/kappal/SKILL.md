@@ -161,6 +161,7 @@ Tell the user:
 On approval:
 - If any services have `build:` contexts: `<kappal-docker-run> up --build -d`
 - If all services use pre-built images: `<kappal-docker-run> up -d`
+- For complex stacks with many sequential Jobs (migrations, seeds): add `--timeout 600` or higher
 
 ### Step 9: Verify
 
@@ -172,8 +173,9 @@ Run `<kappal-docker-run> ps` and report service status to the user.
 
 | Docker Compose Equivalent | Kappal Command | Notes |
 |---|---|---|
-| `docker compose up -d` | `<kappal> up -d` | Start services detached |
+| `docker compose up -d` | `<kappal> up -d` | Start services detached (timeout is a warning, not fatal) |
 | `docker compose up --build -d` | `<kappal> up --build -d` | Build images + start |
+| N/A | `<kappal> up --timeout 600 -d` | Custom readiness timeout in seconds (default 300) |
 | `docker compose down` | `<kappal> down` | Stop services, preserve volumes |
 | `docker compose down -v` | `<kappal> down -v` | Stop + remove volumes |
 | `docker compose ps` | `<kappal> ps` | List running services |
@@ -194,6 +196,7 @@ Run `<kappal-docker-run> ps` and report service status to the user.
 | `-f <path>` | Global (before command) | Specify compose file path |
 | `-p <name>` | Global (before command) | Override project name (default: `<basename>-<8-char-hash>` from compose dir path) |
 | `ps -o json` | ps | JSON output |
+| `up --timeout 600` | up | Readiness timeout in seconds (default 300) |
 | `logs --tail 50` | logs | Last N lines |
 | `exec -it` | exec | Interactive TTY |
 | `exec --index 2` | exec | Target specific replica |
@@ -305,6 +308,8 @@ services, image, build (context + dockerfile + args), ports (TCP/UDP), volumes (
 
 - **`restart: "no"`** — Services with this setting run as Kubernetes Jobs instead of Deployments. They execute once and stop cleanly (no CrashLoopBackOff). Use for migrations, seeds, setup tasks.
 - **`depends_on` with `condition: service_completed_successfully`** — Kappal injects an init container that waits for the dependency Job to complete before starting the dependent service. This works for both Job-to-Job and Job-to-Deployment dependencies.
+- **Failed Job pods** — When K8s retries a failed Job, old failed pods don't block readiness. Only the latest attempt's status matters.
+- **Detach mode timeout** — When `-d` is used, readiness timeout is a warning (exit 0), not a fatal error. Use `--timeout <seconds>` to adjust for complex stacks with sequential job chains.
 - **`profiles`** — Services with `profiles:` are excluded from `kappal up` by default, matching Docker Compose behavior. Profile activation is not yet supported.
 
 ### Not Supported

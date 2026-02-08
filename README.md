@@ -16,9 +16,12 @@ Kappal lets you use familiar Docker Compose commands while running your services
 
 ```bash
 kappal up -d                    # Start services
+kappal up --build -d            # Build images then start
+kappal up --timeout 600 -d      # Custom readiness timeout
 kappal ps                       # List services
 kappal logs api                 # View logs
 kappal exec web sh              # Shell into service
+kappal inspect                  # Machine-readable JSON state
 kappal down                     # Stop services
 ```
 
@@ -58,7 +61,9 @@ services:
 
 - Services with `restart: "no"` become Kubernetes Jobs (not Deployments), so they run once and stop cleanly instead of restarting in a loop.
 - When a service depends on a Job with `condition: service_completed_successfully`, Kappal injects an init container that waits for the Job to complete before starting the dependent service.
+- Failed Job pods from K8s retries don't block readiness — only the latest attempt matters.
 - Services with `profiles` are excluded from `kappal up` by default, matching Docker Compose behavior.
+- In detach mode (`-d`), readiness timeout is a warning, not a fatal error. Use `--timeout` to adjust for complex stacks.
 
 ## Prerequisites
 
@@ -126,8 +131,9 @@ kappal down -v
 | Command | Description |
 |---------|-------------|
 | `kappal --setup` | Set up kappal for this project (required first time) |
-| `kappal up [-d]` | Create and start services |
+| `kappal up [-d]` | Create and start services (timeout is a warning in detach mode) |
 | `kappal up --build` | Build images and start services |
+| `kappal up --timeout 600` | Custom readiness timeout in seconds (default 300) |
 | `kappal down [-v]` | Stop and remove services (-v removes volumes) |
 | `kappal ps` | List running services |
 | `kappal logs [service]` | View service logs |
