@@ -8,6 +8,7 @@ import (
 
 	"github.com/kappal-app/kappal/pkg/compose"
 	"github.com/kappal-app/kappal/pkg/k3s"
+	"github.com/kappal-app/kappal/pkg/state"
 	"github.com/kappal-app/kappal/pkg/tanka"
 	"github.com/kappal-app/kappal/pkg/workspace"
 	"github.com/spf13/cobra"
@@ -58,30 +59,31 @@ func runDown(cmd *cobra.Command, args []string) error {
 		return fmt.Errorf("workspace not found (run 'kappal up' first): %w", err)
 	}
 
+	// Discover live state via labels (fast path — no K8s query)
+	discovered, err := state.Discover(ctx, project.Name, workspaceDir, state.DiscoverOpts{QueryK8s: false})
+	if err != nil {
+		return fmt.Errorf("failed to discover state: %w", err)
+	}
+
+	// Delete resources via Tanka if kubeconfig available
+	// Continue cleanup even if tanka delete fails (e.g. stale kubeconfig, K3s unreachable)
+	if discovered.Kubeconfig != "" {
+		if err := tanka.Delete(ctx, project.Name, discovered.Kubeconfig, tanka.DeleteOpts{
+			AutoApprove:   true,
+			DeleteVolumes: downVolumes,
+		}); err != nil {
+			fmt.Fprintf(os.Stderr, "Warning: failed to delete resources (continuing cleanup): %v\n", err)
+		} else {
+			fmt.Printf("Stopped services for %s\n", project.Name)
+		}
+	}
+
+	// K3s Manager still needed for Stop/Remove/CleanRuntime
 	k3sManager, err := k3s.NewManager(workspaceDir, project.Name)
 	if err != nil {
 		return fmt.Errorf("failed to create K3s manager: %w", err)
 	}
 	defer func() { _ = k3sManager.Close() }()
-
-	// Ensure kubeconfig is reachable from this container
-	if err := k3sManager.EnsureKubeconfig(ctx); err != nil {
-		fmt.Fprintf(os.Stderr, "Warning: %v\n", err)
-	}
-
-	kubeconfigPath := k3sManager.GetKubeconfigPath()
-
-	// Delete resources via Tanka (uses kubeconfig, NOT docker exec kubectl)
-	// If --volumes flag, delete everything including PVCs. Otherwise preserve volumes.
-	// Continue cleanup even if tanka delete fails (e.g. stale kubeconfig, K3s unreachable)
-	if err := tanka.Delete(ctx, project.Name, kubeconfigPath, tanka.DeleteOpts{
-		AutoApprove:   true,
-		DeleteVolumes: downVolumes,
-	}); err != nil {
-		fmt.Fprintf(os.Stderr, "Warning: failed to delete resources (continuing cleanup): %v\n", err)
-	} else {
-		fmt.Printf("Stopped services for %s\n", project.Name)
-	}
 
 	// Always stop and remove K3s on down (matches docker-compose behavior)
 	if err := k3sManager.Stop(ctx); err != nil {

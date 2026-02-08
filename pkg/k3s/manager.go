@@ -63,9 +63,23 @@ func NewManager(workspaceDir string, projectName string) (*Manager, error) {
 }
 
 // SetPublishedPorts sets the compose service ports to publish on the K3s container.
-// Must be called before EnsureRunning.
-func (m *Manager) SetPublishedPorts(ports []PublishedPort) {
+// Must be called before EnsureRunning. Returns an error if duplicate container
+// port/protocol combinations are found.
+func (m *Manager) SetPublishedPorts(ports []PublishedPort) error {
+	seen := make(map[string]bool)
+	for _, p := range ports {
+		proto := p.Protocol
+		if proto == "" {
+			proto = "tcp"
+		}
+		key := fmt.Sprintf("%d/%s", p.ContainerPort, proto)
+		if seen[key] {
+			return fmt.Errorf("two services publish container port %d/%s — each container port can only be used by one service", p.ContainerPort, proto)
+		}
+		seen[key] = true
+	}
 	m.publishedPorts = ports
+	return nil
 }
 
 // containerName returns the Docker container name for this project's K3s instance.
@@ -104,15 +118,10 @@ func (m *Manager) Close() error {
 	return nil
 }
 
-// getVolumeNamePrefix returns a unique prefix for named Docker volumes based on workspace path.
-// This ensures volumes are isolated per project directory.
+// getVolumeNamePrefix returns a unique prefix for named Docker volumes based on project name.
+// This ensures volumes are isolated per project.
 func (m *Manager) getVolumeNamePrefix() string {
-	// Use hash of absolute workspace path for uniqueness
-	absPath, err := filepath.Abs(m.workspaceDir)
-	if err != nil {
-		absPath = m.workspaceDir
-	}
-	hash := sha256.Sum256([]byte(absPath))
+	hash := sha256.Sum256([]byte(m.projectName))
 	return "kappal-" + hex.EncodeToString(hash[:8])
 }
 
@@ -280,8 +289,11 @@ func (m *Manager) start(ctx context.Context) error {
 		return fmt.Errorf("failed to create runtime directory: %w", err)
 	}
 
-	// Create bridge network for isolation
-	if err := m.docker.NetworkCreate(ctx, m.networkName()); err != nil {
+	// Create bridge network for isolation (with project label for discovery)
+	networkLabels := map[string]string{
+		"kappal.io/project": m.projectName,
+	}
+	if err := m.docker.NetworkCreateWithLabels(ctx, m.networkName(), networkLabels); err != nil {
 		return fmt.Errorf("failed to create network: %w", err)
 	}
 
@@ -318,6 +330,10 @@ func (m *Manager) start(ctx context.Context) error {
 			"K3S_KUBECONFIG_MODE=644",
 		},
 		ExposedPorts: exposedPorts,
+		Labels: map[string]string{
+			"kappal.io/project": m.projectName,
+			"kappal.io/role":    "k3s",
+		},
 	}
 
 	// Build host config with privileged mode and bridge networking

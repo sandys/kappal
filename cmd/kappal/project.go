@@ -3,6 +3,7 @@ package main
 import (
 	"crypto/sha256"
 	"fmt"
+	"os"
 	"path/filepath"
 	"regexp"
 	"strings"
@@ -25,10 +26,26 @@ func dirHash(absDir string) string {
 	return fmt.Sprintf("%x", h[:4])
 }
 
-// buildProjectName is a pure function that computes "<sanitised-base>-<8-char-hash>"
-// from the compose directory path. It resolves symlinks so that the same physical
-// directory always produces the same project name regardless of the path used.
+// buildProjectName computes "<sanitised-base>-<8-char-hash>" from the compose
+// directory path. It resolves symlinks so that the same physical directory always
+// produces the same project name regardless of the path used.
+//
+// When KAPPAL_HOST_DIR is set (Docker wrapper mode), it is used as the hash source
+// instead of the container-side path. This ensures different host directories produce
+// different project names even when they all map to /project inside the container.
 func buildProjectName(composeDir string) string {
+	hostDir := os.Getenv("KAPPAL_HOST_DIR")
+	if hostDir != "" {
+		base := sanitizeDNS1123Label(filepath.Base(composeDir))
+		if len(base) > 54 {
+			base = base[:54]
+		}
+		if base == "" {
+			base = "default"
+		}
+		return base + "-" + dirHash(hostDir)
+	}
+
 	absDir, err := filepath.EvalSymlinks(composeDir)
 	if err != nil {
 		// EvalSymlinks can fail if the directory doesn't exist yet (e.g. during clean).

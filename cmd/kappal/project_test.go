@@ -87,6 +87,44 @@ func TestBuildProjectNameDifferentPaths(t *testing.T) {
 	}
 }
 
+func TestBuildProjectNameWithHostDir(t *testing.T) {
+	// Same container path + different KAPPAL_HOST_DIR = different project names
+	t.Run("different host dirs produce different names", func(t *testing.T) {
+		t.Setenv("KAPPAL_HOST_DIR", "/home/alice/project-a")
+		a := buildProjectName("/project")
+		t.Setenv("KAPPAL_HOST_DIR", "/home/alice/project-b")
+		b := buildProjectName("/project")
+		if a == b {
+			t.Errorf("different KAPPAL_HOST_DIR should produce different names; both %q", a)
+		}
+	})
+
+	// Same container path + same KAPPAL_HOST_DIR = same project name
+	t.Run("same host dir produces same name", func(t *testing.T) {
+		t.Setenv("KAPPAL_HOST_DIR", "/home/alice/project-a")
+		a := buildProjectName("/project")
+		b := buildProjectName("/project")
+		if a != b {
+			t.Errorf("same KAPPAL_HOST_DIR should produce same name; got %q and %q", a, b)
+		}
+	})
+
+	// KAPPAL_HOST_DIR unset = original behavior preserved
+	t.Run("unset host dir preserves original behavior", func(t *testing.T) {
+		t.Setenv("KAPPAL_HOST_DIR", "")
+		a := buildProjectName("/home/user/myapp")
+		b := buildProjectName("/home/user/myapp")
+		if a != b {
+			t.Errorf("without KAPPAL_HOST_DIR, same path should produce same name; got %q and %q", a, b)
+		}
+		// Should use the path hash, not empty string hash
+		pattern := regexp.MustCompile(`^myapp-[0-9a-f]{8}$`)
+		if !pattern.MatchString(a) {
+			t.Errorf("without KAPPAL_HOST_DIR, expected myapp-<hash>; got %q", a)
+		}
+	})
+}
+
 func TestBuildProjectNameSymlinkResilience(t *testing.T) {
 	// Create a real directory and a symlink pointing to it.
 	realDir := t.TempDir()

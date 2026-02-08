@@ -10,6 +10,7 @@ import (
 	"github.com/kappal-app/kappal/pkg/compose"
 	"github.com/kappal-app/kappal/pkg/k3s"
 	"github.com/kappal-app/kappal/pkg/k8s"
+	"github.com/kappal-app/kappal/pkg/state"
 	"github.com/kappal-app/kappal/pkg/tanka"
 	"github.com/kappal-app/kappal/pkg/transform"
 	"github.com/kappal-app/kappal/pkg/workspace"
@@ -98,6 +99,12 @@ func runUp(cmd *cobra.Command, args []string) error {
 
 	fmt.Println("Generated Kappal workspace in .kappal/")
 
+	// Discover existing state (if any) for awareness
+	discovered, _ := state.Discover(ctx, project.Name, workspaceDir, state.DiscoverOpts{QueryK8s: false})
+	if discovered != nil && discovered.K3s.Status == "running" {
+		fmt.Println("K3s already running (discovered via labels)")
+	}
+
 	// Ensure K3s is running (ONLY Docker command - starts the container)
 	k3sManager, err := k3s.NewManager(workspaceDir, project.Name)
 	if err != nil {
@@ -127,7 +134,9 @@ func runUp(cmd *cobra.Command, args []string) error {
 			})
 		}
 	}
-	k3sManager.SetPublishedPorts(ports)
+	if err := k3sManager.SetPublishedPorts(ports); err != nil {
+		return err
+	}
 
 	if err := k3sManager.EnsureRunning(ctx); err != nil {
 		return fmt.Errorf("failed to start K3s: %w", err)

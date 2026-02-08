@@ -10,7 +10,7 @@ Use these commands:
 
 For manual testing, use the kappal-builder container:
 ```bash
-docker run --rm -v /var/run/docker.sock:/var/run/docker.sock -v $(pwd):/workspace -w /workspace ghcr.io/sandys/kappal:latest kappal [command]
+docker run --rm -v /var/run/docker.sock:/var/run/docker.sock -v $(pwd):/workspace -w /workspace -e KAPPAL_HOST_DIR="$(pwd)" ghcr.io/sandys/kappal:latest kappal [command]
 ```
 
 ## Skill File Maintenance

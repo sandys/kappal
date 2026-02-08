@@ -108,5 +108,6 @@ exec docker run --rm \
     -v /var/run/docker.sock:/var/run/docker.sock \
     -v "$project_root:/project" \
     -w "$work_dir" \
+    -e KAPPAL_HOST_DIR="$project_root" \
     --network host \
     kappal:latest "${container_args[@]}"

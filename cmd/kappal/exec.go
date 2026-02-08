@@ -7,8 +7,8 @@ import (
 	"path/filepath"
 
 	"github.com/kappal-app/kappal/pkg/compose"
-	"github.com/kappal-app/kappal/pkg/k3s"
 	"github.com/kappal-app/kappal/pkg/k8s"
+	"github.com/kappal-app/kappal/pkg/state"
 	"github.com/spf13/cobra"
 )
 
@@ -81,33 +81,29 @@ func runExec(cmd *cobra.Command, args []string) error {
 	}
 
 	workspaceDir := filepath.Join(projectDir, ".kappal")
-	k3sManager, err := k3s.NewManager(workspaceDir, project.Name)
+
+	// Discover live state via labels (fast path — no K8s query needed)
+	discovered, err := state.Discover(ctx, project.Name, workspaceDir, state.DiscoverOpts{QueryK8s: false})
 	if err != nil {
-		return fmt.Errorf("failed to create K3s manager: %w", err)
-	}
-	defer func() { _ = k3sManager.Close() }()
-
-	// Ensure kubeconfig is reachable from this container
-	if err := k3sManager.EnsureKubeconfig(ctx); err != nil {
-		fmt.Fprintf(os.Stderr, "Warning: %v\n", err)
+		return fmt.Errorf("failed to discover state: %w", err)
 	}
 
-	kubeconfigPath := k3sManager.GetKubeconfigPath()
-
-	// Check if kubeconfig exists (K3s running)
-	if _, err := os.Stat(kubeconfigPath); os.IsNotExist(err) {
+	if discovered.K3s.Status != "running" {
 		return fmt.Errorf("K3s not running (run 'kappal up' first)")
 	}
 
-	// Create k8s client (includes REST config for exec)
-	k8sClient, err := k8s.NewClient(kubeconfigPath)
+	if discovered.Kubeconfig == "" {
+		return fmt.Errorf("kubeconfig not available (run 'kappal up' first)")
+	}
+
+	// Create k8s client
+	k8sClient, err := k8s.NewClient(discovered.Kubeconfig)
 	if err != nil {
 		return fmt.Errorf("failed to create k8s client: %w", err)
 	}
 
 	// If -it flags are both set, enable interactive TTY
 	if execInteractive && execTTY {
-		// For interactive TTY, we need stdin
 		execInteractive = true
 	}
 

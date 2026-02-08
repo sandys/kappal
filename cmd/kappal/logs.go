@@ -7,8 +7,8 @@ import (
 	"path/filepath"
 
 	"github.com/kappal-app/kappal/pkg/compose"
-	"github.com/kappal-app/kappal/pkg/k3s"
 	"github.com/kappal-app/kappal/pkg/k8s"
+	"github.com/kappal-app/kappal/pkg/state"
 	"github.com/spf13/cobra"
 )
 
@@ -40,7 +40,7 @@ Examples:
   kappal logs api            Logs from the api service only
   kappal logs --follow api   Stream api logs continuously
   kappal logs --tail 20      Last 20 lines from all services`,
-	RunE:  runLogs,
+	RunE: runLogs,
 }
 
 func init() {
@@ -68,21 +68,23 @@ func runLogs(cmd *cobra.Command, args []string) error {
 	}
 
 	workspaceDir := filepath.Join(projectDir, ".kappal")
-	k3sManager, err := k3s.NewManager(workspaceDir, project.Name)
+
+	// Discover live state via labels (fast path — no K8s query needed)
+	discovered, err := state.Discover(ctx, project.Name, workspaceDir, state.DiscoverOpts{QueryK8s: false})
 	if err != nil {
-		return fmt.Errorf("failed to create K3s manager: %w", err)
-	}
-	defer func() { _ = k3sManager.Close() }()
-
-	// Ensure kubeconfig is reachable from this container
-	if err := k3sManager.EnsureKubeconfig(ctx); err != nil {
-		fmt.Fprintf(os.Stderr, "Warning: %v\n", err)
+		return fmt.Errorf("failed to discover state: %w", err)
 	}
 
-	kubeconfigPath := k3sManager.GetKubeconfigPath()
+	if discovered.K3s.Status != "running" {
+		return fmt.Errorf("K3s not running (run 'kappal up' first)")
+	}
 
-	// Get logs via client-go (NOT docker exec kubectl)
-	k8sClient, err := k8s.NewClient(kubeconfigPath)
+	if discovered.Kubeconfig == "" {
+		return fmt.Errorf("kubeconfig not available (run 'kappal up' first)")
+	}
+
+	// Get logs via client-go
+	k8sClient, err := k8s.NewClient(discovered.Kubeconfig)
 	if err != nil {
 		return fmt.Errorf("failed to create k8s client: %w", err)
 	}

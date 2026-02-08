@@ -40,6 +40,7 @@ docker run --rm \
   -v /var/run/docker.sock:/var/run/docker.sock \
   -v "<project-root>:/project" \
   -w /project/<compose-dir> \
+  -e KAPPAL_HOST_DIR="<project-root>" \
   --network host \
   ghcr.io/sandys/kappal:latest <command>
 ```
@@ -59,6 +60,7 @@ docker run --rm \
   -v /var/run/docker.sock:/var/run/docker.sock \
   -v "$(pwd):/project" \
   -w /project \
+  -e KAPPAL_HOST_DIR="$(pwd)" \
   --network host \
   ghcr.io/sandys/kappal:latest <command>
 ```
@@ -72,6 +74,7 @@ docker run --rm \
   -v /var/run/docker.sock:/var/run/docker.sock \
   -v "$(pwd):/project" \
   -w /project/deploy/docker-compose \
+  -e KAPPAL_HOST_DIR="$(pwd)" \
   --network host \
   ghcr.io/sandys/kappal:latest <command>
 ```
@@ -87,6 +90,7 @@ docker run --rm \
   -v /var/run/docker.sock:/var/run/docker.sock \
   -v "/absolute/path/to/monorepo/root:/project" \
   -w /project/deploy/docker-compose \
+  -e KAPPAL_HOST_DIR="/absolute/path/to/monorepo/root" \
   --network host \
   ghcr.io/sandys/kappal:latest <command>
 ```
@@ -353,3 +357,7 @@ Override with `-p <name>` when you need a fixed name (e.g. scripting, CI).
 4. **Volume persistence** — `kappal down` preserves volume data. Only `kappal down -v` removes volumes. This is the expected behavior — don't use `-v` unless the user wants a clean slate.
 
 5. **Port conflicts** — Kappal uses `--network host`, so published ports bind directly to the host. If a port is already in use, the service will fail to start. Check with `ss -tlnp` or `lsof -i :<port>` before deploying.
+
+6. **`KAPPAL_HOST_DIR` env var** — Required when running kappal via `docker run`. It tells kappal the real host path of the project directory so the project name is derived from the host path (not the container's `/project`). Without it, all projects would get the same name. Always include `-e KAPPAL_HOST_DIR="<project-root>"` in docker run commands.
+
+7. **Duplicate port/protocol** — If a compose file maps the same container port and protocol twice (e.g. two services both expose `80/tcp`), kappal will return an error instead of silently overwriting.

@@ -26,6 +26,7 @@ docker run --rm \
     -v /var/run/docker.sock:/var/run/docker.sock \
     -v "$PWD:/project" \
     -w /project \
+    -e KAPPAL_HOST_DIR="$PWD" \
     --network host \
     kappal:latest --setup
 
@@ -34,6 +35,7 @@ docker run --rm \
     -v /var/run/docker.sock:/var/run/docker.sock \
     -v "$PWD:/project" \
     -w /project \
+    -e KAPPAL_HOST_DIR="$PWD" \
     --network host \
     kappal:latest up -d
 
@@ -44,6 +46,7 @@ docker run --rm \
     -v /var/run/docker.sock:/var/run/docker.sock \
     -v "$PWD:/project" \
     -w /project \
+    -e KAPPAL_HOST_DIR="$PWD" \
     --network host \
     kappal:latest ps
 
@@ -53,6 +56,7 @@ docker run --rm \
     -v /var/run/docker.sock:/var/run/docker.sock \
     -v "$PWD:/project" \
     -w /project \
+    -e KAPPAL_HOST_DIR="$PWD" \
     --network host \
     kappal:latest down -v
 

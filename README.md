@@ -38,6 +38,8 @@ kappal down                     # Stop services
 - **One-Shot Services** - `restart: "no"` runs as K8s Jobs (migrations, seeds, etc.)
 - **Profiles** - Services with `profiles` excluded from default `up`
 - **Worktree-Safe Naming** - Each directory gets a unique project name (hash-based), so git worktrees or copies with the same basename don't collide
+- **Label-Based Discovery** - K3s containers and networks are stamped with `kappal.io/project` labels, so commands find infrastructure reliably regardless of naming conventions
+- **Verbose Conformance Tests** - `make conformance` shows timestamped command output, per-test timing, and full diagnostic dumps (K3s logs, pod events, container state) on any failure
 
 ## Dependency Ordering & One-Shot Services
 
@@ -86,10 +88,10 @@ curl -fsSL https://get.docker.com | sh
 docker pull ghcr.io/sandys/kappal:latest
 
 # 3. Add alias (for current session)
-alias kappal='docker run --rm -v /var/run/docker.sock:/var/run/docker.sock -v "$(pwd):/project" -w /project --network host ghcr.io/sandys/kappal:latest'
+alias kappal='docker run --rm -v /var/run/docker.sock:/var/run/docker.sock -v "$(pwd):/project" -w /project -e KAPPAL_HOST_DIR="$(pwd)" --network host ghcr.io/sandys/kappal:latest'
 
 # Or save permanently to ~/.bashrc or ~/.zshrc
-echo "alias kappal='docker run --rm -v /var/run/docker.sock:/var/run/docker.sock -v \"\$(pwd):/project\" -w /project --network host ghcr.io/sandys/kappal:latest'" >> ~/.bashrc
+echo "alias kappal='docker run --rm -v /var/run/docker.sock:/var/run/docker.sock -v \"\$(pwd):/project\" -w /project -e KAPPAL_HOST_DIR=\"\$(pwd)\" --network host ghcr.io/sandys/kappal:latest'" >> ~/.bashrc
 source ~/.bashrc
 ```
 
@@ -272,6 +274,7 @@ docker-compose.yaml
 2. **Self-contained** - K3s runs in Docker, no system installation needed
 3. **Persistent by default** - Volumes survive `down`/`up` cycles (use `-v` to remove)
 4. **Standard tools** - Uses compose-go (official parser), K3s, client-go
+5. **Label-based discovery** - Infrastructure is found via Docker labels, not naming conventions
 
 ## Development
 
@@ -308,6 +311,8 @@ Kappal passes all 11 conformance tests based on the [compose-spec](https://githu
 - JobLifecycle - One-shot services run as Jobs and complete
 - DependencyOrdering - `service_completed_successfully` ordering via init containers
 - ProfileExclusion - Profiled services excluded from default `up`
+
+Test output is fully verbose: every command shows timestamped stdout/stderr, per-test elapsed time, and on any failure a full diagnostic dump (kappal ps/inspect, Docker containers, K3s logs, kubectl events, pod descriptions).
 
 ## FAQ
 

@@ -12,6 +12,7 @@ import (
 
 	"github.com/docker/docker/api/types"
 	"github.com/docker/docker/api/types/container"
+	dockerfilters "github.com/docker/docker/api/types/filters"
 	"github.com/docker/docker/api/types/network"
 	"github.com/docker/docker/api/types/volume"
 	"github.com/docker/docker/client"
@@ -21,6 +22,13 @@ import (
 	"github.com/docker/docker/pkg/stdcopy"
 	"github.com/docker/go-connections/nat"
 )
+
+// filtersArgs builds a docker filters.Args with a single key=value pair.
+func filtersArgs(key, value string) dockerfilters.Args {
+	f := dockerfilters.NewArgs()
+	f.Add(key, value)
+	return f
+}
 
 // Client wraps the Docker SDK client
 type Client struct {
@@ -205,9 +213,15 @@ func (c *Client) ContainerExecStream(ctx context.Context, name string, cmd []str
 
 // NetworkCreate creates a Docker bridge network. Idempotent - returns nil if network already exists.
 func (c *Client) NetworkCreate(ctx context.Context, name string) error {
+	return c.NetworkCreateWithLabels(ctx, name, nil)
+}
+
+// NetworkCreateWithLabels creates a Docker bridge network with labels. Idempotent.
+func (c *Client) NetworkCreateWithLabels(ctx context.Context, name string, labels map[string]string) error {
 	_, err := c.cli.NetworkCreate(ctx, name, types.NetworkCreate{
-		Driver:     "bridge",
+		Driver:         "bridge",
 		CheckDuplicate: true,
+		Labels:         labels,
 	})
 	if err != nil {
 		// If network already exists, treat as success
@@ -408,6 +422,59 @@ func (c *Client) ContainerIPOnNetwork(ctx context.Context, containerName, networ
 		return "", fmt.Errorf("container %s not connected to network %s", containerName, networkName)
 	}
 	return endpoint.IPAddress, nil
+}
+
+// ContainerListEntry holds summary info about a discovered container.
+type ContainerListEntry struct {
+	Name   string
+	ID     string
+	Status string // "running" or "stopped"
+}
+
+// ContainerListByLabel finds containers matching a label key=value pair.
+func (c *Client) ContainerListByLabel(ctx context.Context, key, value string) ([]ContainerListEntry, error) {
+	filter := fmt.Sprintf("%s=%s", key, value)
+	containers, err := c.cli.ContainerList(ctx, types.ContainerListOptions{
+		All:     true,
+		Filters: filtersArgs("label", filter),
+	})
+	if err != nil {
+		return nil, fmt.Errorf("failed to list containers by label %s: %w", filter, err)
+	}
+	var entries []ContainerListEntry
+	for _, ctr := range containers {
+		name := ""
+		if len(ctr.Names) > 0 {
+			name = strings.TrimPrefix(ctr.Names[0], "/")
+		}
+		status := "stopped"
+		if ctr.State == "running" {
+			status = "running"
+		}
+		entries = append(entries, ContainerListEntry{
+			Name:   name,
+			ID:     ctr.ID,
+			Status: status,
+		})
+	}
+	return entries, nil
+}
+
+// NetworkListByLabel finds networks matching a label key=value pair.
+// Returns the network names.
+func (c *Client) NetworkListByLabel(ctx context.Context, key, value string) ([]string, error) {
+	filter := fmt.Sprintf("%s=%s", key, value)
+	networks, err := c.cli.NetworkList(ctx, types.NetworkListOptions{
+		Filters: filtersArgs("label", filter),
+	})
+	if err != nil {
+		return nil, fmt.Errorf("failed to list networks by label %s: %w", filter, err)
+	}
+	var names []string
+	for _, n := range networks {
+		names = append(names, n.Name)
+	}
+	return names, nil
 }
 
 // ImageTag tags an image with a new name
