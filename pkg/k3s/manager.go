@@ -11,7 +11,6 @@ import (
 	"os"
 	"path/filepath"
 	"regexp"
-	"strings"
 	"time"
 
 	"github.com/docker/docker/api/types/container"
@@ -364,6 +363,64 @@ func getSelfContainerID() string {
 	return ""
 }
 
+// serverURLRegexp matches the server URL in a kubeconfig file.
+var serverURLRegexp = regexp.MustCompile(`(server:\s*)https://[^:\s]+:\d+`)
+
+// replaceServerURL replaces the server URL in kubeconfig content with the target URL.
+func replaceServerURL(kubeconfig, target string) string {
+	return serverURLRegexp.ReplaceAllString(kubeconfig, "${1}"+target)
+}
+
+// resolveAPIEndpoint determines the correct API server host and port for the
+// current execution context, and connects to the bridge network if running in Docker.
+func (m *Manager) resolveAPIEndpoint(ctx context.Context) (host string, port uint32) {
+	host = "127.0.0.1"
+	port = m.apiHostPort()
+
+	if isInsideDocker() {
+		selfID := getSelfContainerID()
+		if selfID != "" {
+			// Connect our container to the K3s bridge network so we can reach K3s directly
+			if err := m.docker.NetworkConnect(ctx, m.networkName(), selfID); err != nil {
+				fmt.Fprintf(os.Stderr, "\nWarning: could not connect to K3s network: %v\n", err)
+			} else {
+				// Get K3s container's IP on the bridge network
+				ip, err := m.docker.ContainerIPOnNetwork(ctx, m.containerName(), m.networkName())
+				if err == nil && ip != "" {
+					host = ip
+					port = 6443
+				}
+			}
+		}
+	}
+	return
+}
+
+// EnsureKubeconfig ensures the kubeconfig is reachable from the current
+// execution context. When running inside Docker, this connects the current
+// container to the project's bridge network and re-patches the kubeconfig
+// if the server address has changed.
+func (m *Manager) EnsureKubeconfig(ctx context.Context) error {
+	kubeconfigPath := m.GetKubeconfigPath()
+	if _, err := os.Stat(kubeconfigPath); err != nil {
+		return nil // no kubeconfig yet, nothing to do
+	}
+
+	host, port := m.resolveAPIEndpoint(ctx)
+	target := fmt.Sprintf("https://%s:%d", host, port)
+
+	data, err := os.ReadFile(kubeconfigPath)
+	if err != nil {
+		return err
+	}
+
+	patched := replaceServerURL(string(data), target)
+	if patched != string(data) {
+		return os.WriteFile(kubeconfigPath, []byte(patched), 0644)
+	}
+	return nil
+}
+
 // waitForReady waits for K3s to be ready and extracts the kubeconfig
 func (m *Manager) waitForReady(ctx context.Context) error {
 	fmt.Print("Waiting for K3s to be ready")
@@ -376,27 +433,7 @@ func (m *Manager) waitForReady(ctx context.Context) error {
 	containerName := m.containerName()
 
 	// Determine the API server address based on execution context
-	// When running inside Docker, connect to K3s via the bridge network (container IP:6443)
-	// When running on the host, use the published port on 127.0.0.1
-	apiHost := "127.0.0.1"
-	apiPort := m.apiHostPort()
-
-	if isInsideDocker() {
-		selfID := getSelfContainerID()
-		if selfID != "" {
-			// Connect our container to the K3s bridge network so we can reach K3s directly
-			if err := m.docker.NetworkConnect(ctx, m.networkName(), selfID); err != nil {
-				fmt.Fprintf(os.Stderr, "\nWarning: could not connect to K3s network: %v\n", err)
-			} else {
-				// Get K3s container's IP on the bridge network
-				ip, err := m.docker.ContainerIPOnNetwork(ctx, containerName, m.networkName())
-				if err == nil && ip != "" {
-					apiHost = ip
-					apiPort = 6443
-				}
-			}
-		}
-	}
+	host, port := m.resolveAPIEndpoint(ctx)
 
 	deadline := time.Now().Add(180 * time.Second)
 	for time.Now().Before(deadline) {
@@ -404,18 +441,8 @@ func (m *Manager) waitForReady(ctx context.Context) error {
 		output, err := m.docker.ContainerExec(ctx, containerName, []string{"cat", "/etc/rancher/k3s/k3s.yaml"})
 		if err == nil && len(output) > 0 {
 			// Patch kubeconfig to use the correct API server address
-			// K3s may output 127.0.0.1 or 0.0.0.0 depending on --bind-address
-			replacement := fmt.Sprintf("https://%s:%d", apiHost, apiPort)
-			patched := strings.ReplaceAll(
-				string(output),
-				"https://127.0.0.1:6443",
-				replacement,
-			)
-			patched = strings.ReplaceAll(
-				patched,
-				"https://0.0.0.0:6443",
-				replacement,
-			)
+			replacement := fmt.Sprintf("https://%s:%d", host, port)
+			patched := replaceServerURL(string(output), replacement)
 
 			// Write kubeconfig to runtime directory
 			kubeconfigPath := m.GetKubeconfigPath()

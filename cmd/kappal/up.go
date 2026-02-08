@@ -17,8 +17,9 @@ import (
 )
 
 var (
-	upDetach bool
-	upBuild  bool
+	upDetach  bool
+	upBuild   bool
+	upTimeout int
 )
 
 var upCmd = &cobra.Command{
@@ -38,21 +39,24 @@ Port chain: compose ports → K3s container port bindings → K8s NodePort servi
 Published ports bind to the Docker host and are accessible via localhost.
 
 Flags:
-  -d, --detach   Run in the background (currently always detaches after readiness)
-  --build        Build images (from build.context in compose) before starting
-  -f <path>      Compose file path (default: docker-compose.yaml)
-  -p <name>      Override project name
+  -d, --detach       Run in the background (timeout becomes a warning, not an error)
+  --build            Build images (from build.context in compose) before starting
+  --timeout <secs>   Seconds to wait for services to be ready (default 300)
+  -f <path>          Compose file path (default: docker-compose.yaml)
+  -p <name>          Override project name
 
 Examples:
-  kappal up -d                Start all services
-  kappal up --build -d        Build images then start
-  kappal -p myapp up -d       Start with explicit project name`,
+  kappal up -d                  Start all services
+  kappal up --build -d          Build images then start
+  kappal up --timeout 600 -d    Wait up to 10 minutes for readiness
+  kappal -p myapp up -d         Start with explicit project name`,
 	RunE:  runUp,
 }
 
 func init() {
 	upCmd.Flags().BoolVarP(&upDetach, "detach", "d", false, "Run containers in the background")
 	upCmd.Flags().BoolVar(&upBuild, "build", false, "Build images before starting containers")
+	upCmd.Flags().IntVar(&upTimeout, "timeout", 300, "Timeout in seconds waiting for services to be ready")
 }
 
 func runUp(cmd *cobra.Command, args []string) error {
@@ -198,10 +202,16 @@ func runUp(cmd *cobra.Command, args []string) error {
 
 	fmt.Println("Waiting for services to be ready...")
 	labelSelector := fmt.Sprintf("kappal.io/project=%s", project.Name)
-	if err := k8sClient.WaitForPodsReady(ctx, project.Name, labelSelector, 300*time.Second); err != nil {
-		return fmt.Errorf("services not ready: %w", err)
+	if err := k8sClient.WaitForPodsReady(ctx, project.Name, labelSelector, time.Duration(upTimeout)*time.Second); err != nil {
+		if upDetach {
+			fmt.Fprintf(os.Stderr, "Warning: %v (services may still be starting)\n", err)
+			fmt.Println("Services starting in background. Use 'kappal ps' to check status.")
+		} else {
+			return fmt.Errorf("services not ready: %w", err)
+		}
+	} else {
+		fmt.Println("Services started successfully!")
 	}
 
-	fmt.Println("Services started successfully!")
 	return nil
 }

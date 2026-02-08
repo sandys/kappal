@@ -108,6 +108,8 @@ func (c *Client) WaitForPodsReady(ctx context.Context, namespace, labelSelector 
 			switch pod.Status.Phase {
 			case corev1.PodSucceeded:
 				continue // Job completed successfully, counts as ready
+			case corev1.PodFailed:
+				continue // Job retry — old failed pods don't block readiness
 			case corev1.PodRunning:
 				// Check Ready condition
 				for _, cond := range pod.Status.Conditions {

@@ -335,6 +335,11 @@ func runInspect(cmd *cobra.Command, args []string) error {
 		}
 	}
 
+	// Ensure kubeconfig is reachable from this container (reconnects bridge network if needed)
+	if err := k3sManager.EnsureKubeconfig(ctx); err != nil {
+		fmt.Fprintf(os.Stderr, "Warning: %v\n", err)
+	}
+
 	// Query K8s API — gracefully degrade if unreachable
 	kubeconfigPath := k3sManager.GetKubeconfigPath()
 	deploymentMap := make(map[string]deploymentInfo)

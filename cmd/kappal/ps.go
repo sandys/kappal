@@ -81,6 +81,11 @@ func runPs(cmd *cobra.Command, args []string) error {
 	}
 	defer func() { _ = k3sManager.Close() }()
 
+	// Ensure kubeconfig is reachable from this container
+	if err := k3sManager.EnsureKubeconfig(ctx); err != nil {
+		fmt.Fprintf(os.Stderr, "Warning: %v\n", err)
+	}
+
 	kubeconfigPath := k3sManager.GetKubeconfigPath()
 
 	// Get status via client-go (NOT docker exec kubectl)
