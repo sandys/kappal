@@ -119,7 +119,8 @@ Parse it for:
 - **Named volumes** — note persistent data
 - **`deploy.replicas`** — note scaling configuration
 - **`restart: "no"`** — these services will run as one-shot Jobs (migrations, seeds, etc.)
-- **`depends_on` with conditions** — note any `service_completed_successfully` dependencies (Jobs will complete before dependents start)
+- **`depends_on` with conditions** — note any `service_completed_successfully` (Jobs) and `service_healthy` (healthcheck-based) dependencies
+- **`healthcheck:`** — note services with healthchecks (translated to K8s readiness probes)
 - **`profiles:`** — these services will be excluded from default `up`
 
 ### Step 3: Detect scenario
@@ -156,7 +157,7 @@ Tell the user:
 - Which services will be built (those with `build:`)
 - Which services will run as one-shot Jobs (`restart: "no"`)
 - Which services are excluded due to profiles
-- Any dependency ordering (`depends_on` with `service_completed_successfully`)
+- Any dependency ordering (`depends_on` with `service_completed_successfully` or `service_healthy`)
 - What ports will be exposed
 - Any volumes that will be created
 
@@ -188,7 +189,8 @@ Run `<kappal-docker-run> ps` and report service status to the user.
 | `docker compose exec <svc> sh` | `<kappal> exec <svc> sh` | Shell into a service |
 | `docker compose build` | `<kappal> build` | Build all images |
 | `docker compose build <svc>` | `<kappal> build <svc>` | Build a specific service |
-| N/A | `<kappal> clean` | Remove kappal workspace + K3s |
+| N/A | `<kappal> clean` | Remove kappal workspace + K3s for current project |
+| N/A | `<kappal> clean --all` | Remove ALL kappal resources system-wide |
 | N/A | `<kappal> eject -o tanka/` | Export as standalone Tanka workspace |
 
 | N/A | `<kappal> inspect` | Machine-readable JSON state of the entire project |
@@ -209,7 +211,7 @@ Run `<kappal-docker-run> ps` and report service status to the user.
 
 ## 5a. Programmatic Inspection (`kappal inspect`)
 
-`kappal inspect` outputs a self-documenting JSON object combining compose file service definitions with live K8s and Docker runtime state. Use it instead of `ps` when you need machine-readable data — ports, pod IPs, replica counts, or K3s container info. If K3s is running but the API is unreachable, services are listed with status `"unavailable"`. Services in the compose file but not deployed show status `"missing"`. For Deployments, only Running/Pending pods are shown (historical completed/failed pods are filtered out). For Jobs, all pods are shown including Succeeded/Failed to reflect execution history.
+`kappal inspect` outputs a self-documenting JSON object combining compose file service definitions with live K8s and Docker runtime state. Use it instead of `ps` when you need machine-readable data — ports, pod IPs, replica counts, healthcheck config, or K3s container info. If K3s is running but the API is unreachable, services are listed with status `"unavailable"`. Services in the compose file but not deployed show status `"missing"`. For Deployments, only Running/Pending pods are shown (historical completed/failed pods are filtered out). For Jobs, all pods are shown including Succeeded/Failed to reflect execution history.
 
 ### JSON Structure
 
@@ -232,6 +234,13 @@ Run `<kappal-docker-run> ps` and report service status to the user.
       "ports": [
         { "host": 8080, "container": 80, "protocol": "tcp" }
       ],
+      "healthcheck": {
+        "test": ["CMD-SHELL", "curl -f http://localhost/health"],
+        "interval": "10s",
+        "timeout": "5s",
+        "retries": 3,
+        "start_period": "30s"
+      },
       "pods": [
         { "name": "web-abc123", "status": "Running", "ip": "10.42.0.5" },
         { "name": "web-def456", "status": "Running", "ip": "10.42.0.6" }
@@ -258,6 +267,12 @@ Run `<kappal-docker-run> ps` and report service status to the user.
 | `services[].ports[].host` | Port number on the Docker host. Use for external access (curl, browser). |
 | `services[].ports[].container` | Target port for the K8s Service and container (the compose `target` value). Kappal sets both the K8s Service port and targetPort to this value. |
 | `services[].ports[].protocol` | Transport protocol: `tcp` or `udp`. |
+| `services[].healthcheck` | Compose healthcheck definition, mapped to a K8s readiness probe. Only present if the service defines a healthcheck. |
+| `services[].healthcheck.test` | Healthcheck command. Format: `["CMD-SHELL", "command"]` or `["CMD", "arg1", ...]`. |
+| `services[].healthcheck.interval` | Time between probe attempts (e.g. `10s`). Maps to K8s `readinessProbe.periodSeconds`. |
+| `services[].healthcheck.timeout` | Max time for a single probe (e.g. `5s`). Maps to K8s `readinessProbe.timeoutSeconds`. |
+| `services[].healthcheck.retries` | Consecutive failures before marking unhealthy. Maps to K8s `readinessProbe.failureThreshold`. |
+| `services[].healthcheck.start_period` | Grace period before probes count (e.g. `30s`). Maps to K8s `readinessProbe.initialDelaySeconds`. |
 | `services[].pods[].name` | K8s pod name (auto-generated with random suffix). |
 | `services[].pods[].status` | K8s pod phase. Deployment pods: `Running`, `Pending`. Job pods: `Running`, `Pending`, `Succeeded`, `Failed`, `Unknown`. |
 | `services[].pods[].ip` | Pod's cluster-internal IP on the K3s overlay network. |
@@ -306,19 +321,21 @@ curl http://localhost:$PORT/health
 
 ### Fully Supported
 
-services, image, build (context + dockerfile + args), ports (TCP/UDP), volumes (named), environment, env_file, secrets, configs, networks, command, entrypoint, deploy.replicas, labels, restart, depends_on (including `service_completed_successfully`), profiles, one-shot services (Jobs)
+services, image, build (context + dockerfile + args), ports (TCP/UDP), volumes (named), environment, env_file, secrets, configs, networks, command, entrypoint, deploy.replicas, labels, restart, depends_on (including `service_completed_successfully` and `service_healthy`), healthchecks (mapped to K8s readiness probes), profiles, one-shot services (Jobs)
 
 ### Key Behaviors
 
 - **`restart: "no"`** — Services with this setting run as Kubernetes Jobs instead of Deployments. They execute once and stop cleanly (no CrashLoopBackOff). Use for migrations, seeds, setup tasks.
 - **`depends_on` with `condition: service_completed_successfully`** — Kappal injects an init container that waits for the dependency Job to complete before starting the dependent service. This works for both Job-to-Job and Job-to-Deployment dependencies.
+- **`depends_on` with `condition: service_healthy`** — Kappal injects an init container that waits for the dependency's pod to reach `Ready` status (healthcheck passing). The dependency service must define a `healthcheck`.
+- **`healthcheck`** — Compose healthcheck definitions are translated to K8s readiness probes (exec-based). Both `CMD-SHELL` and `CMD` formats are supported. `interval`, `timeout`, `retries`, and `start_period` map to K8s probe parameters.
 - **Failed Job pods** — When K8s retries a failed Job, old failed pods don't block readiness. Only the latest attempt's status matters.
 - **Detach mode timeout** — When `-d` is used, readiness timeout is a warning (exit 0), not a fatal error. Use `--timeout <seconds>` to adjust for complex stacks with sequential job chains.
 - **`profiles`** — Services with `profiles:` are excluded from `kappal up` by default, matching Docker Compose behavior. Profile activation is not yet supported.
 
 ### Not Supported
 
-extends, resource limits (mem/cpu), healthcheck enforcement, log drivers, profile activation (`--profile`)
+extends, resource limits (mem/cpu), log drivers, profile activation (`--profile`)
 
 ---
 
@@ -350,7 +367,7 @@ Override with `-p <name>` when you need a fixed name (e.g. scripting, CI).
 
 1. **Monorepo mount path** — If any `build.context` goes above the compose directory, the `-v` mount must start from the highest needed ancestor. Getting this wrong causes "file not found" during builds.
 
-2. **depends_on conditions** — Kappal fully supports `service_completed_successfully` for Job dependencies. However, `service_healthy` is not yet enforced. For health-based readiness, handle it in the app's entrypoint.
+2. **depends_on conditions** — Kappal supports both `service_completed_successfully` (Job dependencies) and `service_healthy` (healthcheck-based readiness). The dependency service must define a `healthcheck` for `service_healthy` to work.
 
 3. **YAML anchors** — `x-*` extension fields and YAML anchors work fine. They are parsed by compose-go.
 

@@ -35,8 +35,11 @@ kappal down                     # Stop services
 - **Network Isolation** - Define networks to isolate service groups
 - **UDP Support** - Full protocol support including UDP ports
 - **Dependency Ordering** - `depends_on` with `service_completed_successfully` for Jobs
+- **Health-Based Dependencies** - `depends_on` with `service_healthy` waits for healthcheck readiness
+- **Healthchecks** - Compose `healthcheck` maps to K8s readiness probes automatically
 - **One-Shot Services** - `restart: "no"` runs as K8s Jobs (migrations, seeds, etc.)
 - **Profiles** - Services with `profiles` excluded from default `up`
+- **Global Cleanup** - `kappal clean --all` removes all kappal resources system-wide
 - **Worktree-Safe Naming** - Each directory gets a unique project name (hash-based), so git worktrees or copies with the same basename don't collide
 - **Label-Based Discovery** - K3s containers and networks are stamped with `kappal.io/project` labels, so commands find infrastructure reliably regardless of naming conventions
 - **Verbose Conformance Tests** - `make conformance` shows timestamped command output, per-test timing, and full diagnostic dumps (K3s logs, pod events, container state) on any failure
@@ -66,6 +69,35 @@ services:
 - Failed Job pods from K8s retries don't block readiness — only the latest attempt matters.
 - Services with `profiles` are excluded from `kappal up` by default, matching Docker Compose behavior.
 - In detach mode (`-d`), readiness timeout is a warning, not a fatal error. Use `--timeout` to adjust for complex stacks.
+
+## Healthchecks & service_healthy Dependencies
+
+Compose `healthcheck` definitions are automatically translated to Kubernetes readiness probes:
+
+```yaml
+services:
+  db:
+    image: postgres:16
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U postgres"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+      start_period: 30s
+
+  app:
+    image: myapp:latest
+    depends_on:
+      db:
+        condition: service_healthy    # Waits for db's healthcheck to pass
+```
+
+**How it works:**
+
+- `healthcheck.test` becomes a K8s `readinessProbe` (exec-based). Both `CMD-SHELL` and `CMD` formats are supported.
+- `interval`, `timeout`, `retries`, and `start_period` map to `periodSeconds`, `timeoutSeconds`, `failureThreshold`, and `initialDelaySeconds` respectively.
+- When a service has `depends_on` with `condition: service_healthy`, Kappal injects an init container that polls the dependency's pod until its `Ready` condition is true.
+- `kappal inspect` includes the healthcheck definition for services that have one.
 
 ## Prerequisites
 
@@ -142,7 +174,8 @@ kappal down -v
 | `kappal exec <service> <cmd>` | Execute command in service |
 | `kappal build` | Build images from Dockerfiles |
 | `kappal inspect` | Show project state as self-documenting JSON |
-| `kappal clean` | Remove kappal workspace and K3s |
+| `kappal clean` | Remove kappal workspace and K3s for current project |
+| `kappal clean --all` | Remove ALL kappal resources system-wide |
 | `kappal eject` | Export as standalone Tanka workspace |
 
 ## Compose Features Supported
@@ -163,9 +196,10 @@ kappal down -v
 | Entrypoint | ✅ | `entrypoint: ["/docker-entrypoint.sh"]` |
 | UDP ports | ✅ | `ports: ["53:53/udp"]` |
 | Depends On | ✅ | `depends_on: {db: {condition: service_completed_successfully}}` |
+| Healthchecks | ✅ | `healthcheck.test` → K8s readiness probe |
+| service_healthy | ✅ | `depends_on: {db: {condition: service_healthy}}` |
 | One-Shot Services (Jobs) | ✅ | `restart: "no"` runs as a K8s Job |
 | Profiles | ✅ | `profiles: [debug]` excluded from default `up` |
-| Healthchecks | 🚧 | Planned |
 
 **Note:** Duplicate container port/protocol across services (e.g. two services both exposing `80/tcp`) is rejected with an error.
 
@@ -206,7 +240,7 @@ kappal-myproject up --build
 
 ## Programmatic Access (`kappal inspect`)
 
-`kappal inspect` outputs a self-documenting JSON object combining compose file service definitions with live K8s and Docker runtime state — ports, replicas, pod IPs, and K3s container info. The JSON includes a `_schema` field describing every data field. If K3s is running but the API is unreachable, services are listed with status `"unavailable"`. Services in the compose file but not deployed show status `"missing"`. For Deployments, only Running/Pending pods are shown (historical completed/failed pods are filtered out). For Jobs, all pods are shown including Succeeded/Failed to reflect execution history.
+`kappal inspect` outputs a self-documenting JSON object combining compose file service definitions with live K8s and Docker runtime state — ports, replicas, pod IPs, healthcheck config, and K3s container info. The JSON includes a `_schema` field describing every data field. If K3s is running but the API is unreachable, services are listed with status `"unavailable"`. Services in the compose file but not deployed show status `"missing"`. For Deployments, only Running/Pending pods are shown (historical completed/failed pods are filtered out). For Jobs, all pods are shown including Succeeded/Failed to reflect execution history.
 
 ```bash
 # Full project state
