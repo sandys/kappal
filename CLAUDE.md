@@ -8,10 +8,15 @@ Use these commands:
 - `make conformance` - Run conformance tests (runs kappal in Docker)
 - `make dev-test` - Run dev tests (runs kappal in Docker)
 
-For manual testing, use the kappal-builder container:
+For manual testing, first build locally then use the local image:
 ```bash
-docker run --rm -v /var/run/docker.sock:/var/run/docker.sock -v $(pwd):/workspace -w /workspace -e KAPPAL_HOST_DIR="$(pwd)" ghcr.io/sandys/kappal:latest kappal [command]
+make docker-build   # Builds kappal:latest locally
+docker run --rm -v /var/run/docker.sock:/var/run/docker.sock -v $(pwd):/workspace -w /workspace -e KAPPAL_HOST_DIR="$(pwd)" kappal:latest [command]
 ```
+
+Note: The entrypoint is already `kappal`, so pass only the command (e.g. `up -d`, `clean --all`), not `kappal [command]`.
+
+**IMPORTANT:** Never use `ghcr.io/sandys/kappal:latest` for local development. The `ghcr.io` image is only for end users (README/SKILL.md). Local dev always uses `kappal:latest` built from source via `make docker-build`.
 
 ## Skill File Maintenance
 

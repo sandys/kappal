@@ -8,6 +8,7 @@ import (
 	"path/filepath"
 	"regexp"
 	"strings"
+	"time"
 
 	"github.com/compose-spec/compose-go/v2/types"
 	"github.com/kappal-app/kappal/pkg/workspace"
@@ -60,8 +61,16 @@ type DependsOnSpec struct {
 	Condition string `json:"condition,omitempty"`
 }
 
-// KappalInitImage is the image used for init containers that wait for Job dependencies
-const KappalInitImage = "ghcr.io/sandys/kappal:latest"
+// GetInitImage returns the image name for kappal-init containers.
+// Defaults to "kappal-init:latest" — a local image built by LoadInitImage
+// from the kappal-init binary and loaded into K3s containerd.
+// Override with KAPPAL_INIT_IMAGE env var if a pre-built registry image is needed.
+func GetInitImage() string {
+	if img := os.Getenv("KAPPAL_INIT_IMAGE"); img != "" {
+		return img
+	}
+	return "kappal-init:latest"
+}
 
 // ServiceSpec represents a compose service
 type ServiceSpec struct {
@@ -540,21 +549,24 @@ spec:
 		manifests = append(manifests, npManifest)
 	}
 
-	// Generate RBAC if any service depends on a Job completing
+	// Generate RBAC if any service has init container dependencies
 	hasJobDependency := false
+	hasServiceDependency := false
 	for _, svc := range spec.Services {
 		for _, dep := range svc.DependsOn {
 			if dep.Condition == "service_completed_successfully" {
 				hasJobDependency = true
-				break
+			}
+			if dep.Condition == "service_healthy" {
+				hasServiceDependency = true
 			}
 		}
-		if hasJobDependency {
+		if hasJobDependency && hasServiceDependency {
 			break
 		}
 	}
-	if hasJobDependency {
-		manifests = append(manifests, t.generateJobReaderRBAC(spec.Name))
+	if hasJobDependency || hasServiceDependency {
+		manifests = append(manifests, t.generateInitReaderRBAC(spec.Name, hasJobDependency, hasServiceDependency))
 	}
 
 	// Generate Deployments/Jobs and Services for each service
@@ -686,6 +698,13 @@ func (t *Transformer) buildContainerSpec(projectName, serviceName string, svc Se
 		containerParts = append(containerParts, "        volumeMounts:\n"+strings.Join(volumeMountLines, "\n"))
 	}
 
+	// Convert compose healthcheck to K8s readiness probe
+	if svc.HealthCheck != nil && len(svc.HealthCheck.Test) > 0 {
+		if probe := buildReadinessProbe(svc.HealthCheck); probe != "" {
+			containerParts = append(containerParts, probe)
+		}
+	}
+
 	containerSpec := strings.Join(containerParts, "\n")
 	if containerSpec != "" {
 		containerSpec = "\n" + containerSpec
@@ -703,31 +722,109 @@ func (t *Transformer) buildContainerSpec(projectName, serviceName string, svc Se
 	}
 }
 
-// buildInitContainerSpec generates the init container YAML for waiting on Job dependencies
+// durationToSeconds parses a Go duration string and returns seconds (minimum 1).
+func durationToSeconds(s string) int {
+	d, err := time.ParseDuration(s)
+	if err != nil || d <= 0 {
+		return 0
+	}
+	secs := int(d.Seconds())
+	if secs < 1 {
+		secs = 1
+	}
+	return secs
+}
+
+// buildReadinessProbe converts a compose HealthCheckSpec to K8s readinessProbe YAML.
+func buildReadinessProbe(hc *HealthCheckSpec) string {
+	if len(hc.Test) == 0 {
+		return ""
+	}
+
+	// Parse test command: ["CMD-SHELL", "cmd"] or ["CMD", "arg1", ...] or ["NONE"]
+	var command []string
+	switch hc.Test[0] {
+	case "CMD-SHELL":
+		if len(hc.Test) < 2 {
+			return ""
+		}
+		command = []string{"/bin/sh", "-c", hc.Test[1]}
+	case "CMD":
+		if len(hc.Test) < 2 {
+			return ""
+		}
+		command = hc.Test[1:]
+	case "NONE":
+		return ""
+	default:
+		// Bare command (no prefix) — treat as shell command
+		command = []string{"/bin/sh", "-c", strings.Join(hc.Test, " ")}
+	}
+
+	var cmdLines []string
+	for _, c := range command {
+		cmdLines = append(cmdLines, fmt.Sprintf("            - \"%s\"", escapeYAML(c)))
+	}
+
+	probe := "        readinessProbe:\n          exec:\n            command:\n" + strings.Join(cmdLines, "\n")
+
+	if hc.Interval != "" {
+		if secs := durationToSeconds(hc.Interval); secs > 0 {
+			probe += fmt.Sprintf("\n          periodSeconds: %d", secs)
+		}
+	}
+	if hc.Timeout != "" {
+		if secs := durationToSeconds(hc.Timeout); secs > 0 {
+			probe += fmt.Sprintf("\n          timeoutSeconds: %d", secs)
+		}
+	}
+	if hc.Retries > 0 {
+		probe += fmt.Sprintf("\n          failureThreshold: %d", hc.Retries)
+	}
+	if hc.StartPeriod != "" {
+		if secs := durationToSeconds(hc.StartPeriod); secs > 0 {
+			probe += fmt.Sprintf("\n          initialDelaySeconds: %d", secs)
+		}
+	}
+
+	return probe
+}
+
+// buildInitContainerSpec generates the init container YAML for waiting on dependencies.
+// It handles both service_completed_successfully (Jobs) and service_healthy (Deployments with healthchecks).
 func (t *Transformer) buildInitContainerSpec(projectName string, svc ServiceSpec, allServices map[string]ServiceSpec) string {
 	var waitForJobs []string
+	var waitForServices []string
 	for _, dep := range svc.DependsOn {
-		if dep.Condition == "service_completed_successfully" {
+		switch dep.Condition {
+		case "service_completed_successfully":
 			if depSvc, ok := allServices[dep.Service]; ok && depSvc.IsJob {
 				waitForJobs = append(waitForJobs, dep.Service)
+			}
+		case "service_healthy":
+			if depSvc, ok := allServices[dep.Service]; ok && !depSvc.IsJob {
+				waitForServices = append(waitForServices, dep.Service)
 			}
 		}
 	}
 
-	if len(waitForJobs) == 0 {
+	if len(waitForJobs) == 0 && len(waitForServices) == 0 {
 		return ""
 	}
 
-	jobsJSON := `[`
-	for i, j := range waitForJobs {
-		if i > 0 {
-			jobsJSON += ","
+	toJSONArray := func(items []string) string {
+		if len(items) == 0 {
+			return "[]"
 		}
-		jobsJSON += fmt.Sprintf(`"%s"`, j)
+		parts := make([]string, len(items))
+		for i, item := range items {
+			parts[i] = fmt.Sprintf(`"%s"`, item)
+		}
+		return "[" + strings.Join(parts, ",") + "]"
 	}
-	jobsJSON += `]`
 
-	specJSON := fmt.Sprintf(`{"namespace":"%s","waitForJobs":%s}`, projectName, jobsJSON)
+	specJSON := fmt.Sprintf(`{"namespace":"%s","waitForJobs":%s,"waitForServices":%s}`,
+		projectName, toJSONArray(waitForJobs), toJSONArray(waitForServices))
 
 	return fmt.Sprintf(`
       initContainers:
@@ -737,7 +834,7 @@ func (t *Transformer) buildInitContainerSpec(projectName string, svc ServiceSpec
         command: ["kappal-init"]
         env:
         - name: KAPPAL_INIT_SPEC
-          value: '%s'`, KappalInitImage, specJSON)
+          value: '%s'`, GetInitImage(), specJSON)
 }
 
 func (t *Transformer) generateDeployment(projectName, serviceName string, svc ServiceSpec, allServices map[string]ServiceSpec) string {
@@ -818,24 +915,34 @@ spec:
 		serviceName, svc.Image, parts.containerSpec, parts.volumeSpec)
 }
 
-func (t *Transformer) generateJobReaderRBAC(projectName string) string {
+func (t *Transformer) generateInitReaderRBAC(projectName string, needJobs, needPods bool) string {
+	var rules []string
+	if needJobs {
+		rules = append(rules, `- apiGroups: ["batch"]
+  resources: ["jobs"]
+  verbs: ["get", "list", "watch"]`)
+	}
+	if needPods {
+		rules = append(rules, `- apiGroups: [""]
+  resources: ["pods"]
+  verbs: ["get", "list"]`)
+	}
+
 	return fmt.Sprintf(`---
 apiVersion: rbac.authorization.k8s.io/v1
 kind: Role
 metadata:
-  name: kappal-job-reader
+  name: kappal-init-reader
   namespace: %s
   labels:
     kappal.io/project: "%s"
 rules:
-- apiGroups: ["batch"]
-  resources: ["jobs"]
-  verbs: ["get", "list", "watch"]
+%s
 ---
 apiVersion: rbac.authorization.k8s.io/v1
 kind: RoleBinding
 metadata:
-  name: kappal-job-reader
+  name: kappal-init-reader
   namespace: %s
   labels:
     kappal.io/project: "%s"
@@ -845,8 +952,8 @@ subjects:
   namespace: %s
 roleRef:
   kind: Role
-  name: kappal-job-reader
-  apiGroup: rbac.authorization.k8s.io`, projectName, projectName, projectName, projectName, projectName)
+  name: kappal-init-reader
+  apiGroup: rbac.authorization.k8s.io`, projectName, projectName, strings.Join(rules, "\n"), projectName, projectName, projectName)
 }
 
 // getDefaultPort returns the default port for well-known images
@@ -943,5 +1050,6 @@ spec:
 func escapeYAML(s string) string {
 	s = strings.ReplaceAll(s, `\`, `\\`)
 	s = strings.ReplaceAll(s, `"`, `\"`)
+	s = strings.ReplaceAll(s, "\n", `\n`)
 	return s
 }

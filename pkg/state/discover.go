@@ -3,6 +3,7 @@ package state
 import (
 	"context"
 	"fmt"
+	"regexp"
 	"strconv"
 	"strings"
 
@@ -16,9 +17,19 @@ type DiscoverOpts struct {
 	QueryK8s bool // if true, also queries K8s API for service/pod state
 }
 
+// sanitizeDockerName replicates the sanitize logic from k3s.Manager so
+// that Discover can construct convention-based container/network names
+// for pre-label K3s instances without importing pkg/k3s.
+var sanitizeDockerRe = regexp.MustCompile(`[^a-zA-Z0-9_.-]`)
+
+func sanitizeDockerName(name string) string {
+	return sanitizeDockerRe.ReplaceAllString(name, "-")
+}
+
 // Discover finds the live runtime state for a kappal project by querying
-// Docker labels and (optionally) the K8s API. It never constructs names
-// from conventions — everything comes from labels on live resources.
+// Docker labels and (optionally) the K8s API. If no labeled container is
+// found, it falls back to convention-based names (kappal-<project>-k3s)
+// so that pre-label K3s instances remain visible.
 func Discover(ctx context.Context, projectName string, workspaceDir string, opts DiscoverOpts) (*State, error) {
 	dockerClient, err := docker.NewClient()
 	if err != nil {
@@ -35,19 +46,42 @@ func Discover(ctx context.Context, projectName string, workspaceDir string, opts
 		},
 	}
 
-	// 1. Find K3s container by label
-	containers, err := dockerClient.ContainerListByLabel(ctx, "kappal.io/project", projectName)
+	// 1. Find K3s container by labels (project + role)
+	containers, err := dockerClient.ContainerListByLabels(ctx, map[string]string{
+		"kappal.io/project": projectName,
+		"kappal.io/role":    "k3s",
+	})
 	if err != nil {
 		return nil, fmt.Errorf("failed to discover containers: %w", err)
 	}
 
 	var k3sContainer *docker.ContainerListEntry
-	for i := range containers {
-		st.K3s.ContainerName = containers[i].Name
-		st.K3s.ContainerID = containers[i].ID
-		st.K3s.Status = containers[i].Status
-		k3sContainer = &containers[i]
-		break // take the first match
+	if len(containers) > 0 {
+		k3sContainer = &containers[0]
+		st.K3s.ContainerName = k3sContainer.Name
+		st.K3s.ContainerID = k3sContainer.ID
+		st.K3s.Status = k3sContainer.Status
+	}
+
+	// Fallback: if no labeled container found, try convention-based name
+	// for pre-label K3s instances created before label discovery was added.
+	foundViaFallback := false
+	if k3sContainer == nil {
+		conventionName := fmt.Sprintf("kappal-%s-k3s", sanitizeDockerName(projectName))
+		exists, running, err := dockerClient.ContainerState(ctx, conventionName)
+		if err == nil && exists {
+			status := "stopped"
+			if running {
+				status = "running"
+			}
+			st.K3s.ContainerName = conventionName
+			st.K3s.Status = status
+			k3sContainer = &docker.ContainerListEntry{
+				Name:   conventionName,
+				Status: status,
+			}
+			foundViaFallback = true
+		}
 	}
 
 	if k3sContainer == nil {
@@ -61,6 +95,13 @@ func Discover(ctx context.Context, projectName string, workspaceDir string, opts
 	}
 	if len(networks) > 0 {
 		st.K3s.Network = networks[0]
+	}
+
+	// Fallback: only set convention network name when the container was also
+	// found via convention fallback (pre-label). If the container was found by
+	// label but the network wasn't, the network genuinely doesn't exist.
+	if st.K3s.Network == "" && foundViaFallback {
+		st.K3s.Network = fmt.Sprintf("kappal-%s-net", sanitizeDockerName(projectName))
 	}
 
 	if st.K3s.Status != "running" {

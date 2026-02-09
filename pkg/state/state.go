@@ -20,13 +20,23 @@ type K3sInfo struct {
 
 // ServiceInfo holds K8s-level state of a single compose service.
 type ServiceInfo struct {
-	Name     string
-	Kind     string // "Deployment" or "Job"
-	Image    string
-	Status   string
-	Replicas *Replicas // nil for Jobs
-	Pods     []PodInfo
-	Ports    []PortInfo
+	Name        string
+	Kind        string // "Deployment" or "Job"
+	Image       string
+	Status      string
+	Replicas    *Replicas    // nil for Jobs
+	Pods        []PodInfo
+	Ports       []PortInfo
+	HealthCheck *HealthCheck // nil if no healthcheck defined
+}
+
+// HealthCheck holds a compose healthcheck definition that maps to a K8s readiness probe.
+type HealthCheck struct {
+	Test        []string // e.g. ["CMD-SHELL", "pg_isready -U postgres"]
+	Interval    string   // e.g. "10s"
+	Timeout     string   // e.g. "5s"
+	Retries     int
+	StartPeriod string // e.g. "30s"
 }
 
 // Replicas holds Deployment replica counts.

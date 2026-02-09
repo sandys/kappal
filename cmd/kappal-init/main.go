@@ -8,6 +8,7 @@ import (
 	"time"
 
 	batchv1 "k8s.io/api/batch/v1"
+	corev1 "k8s.io/api/core/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/client-go/kubernetes"
 	"k8s.io/client-go/rest"
@@ -15,8 +16,9 @@ import (
 
 // InitSpec defines what this init container should wait for.
 type InitSpec struct {
-	Namespace   string   `json:"namespace"`
-	WaitForJobs []string `json:"waitForJobs"`
+	Namespace       string   `json:"namespace"`
+	WaitForJobs     []string `json:"waitForJobs"`
+	WaitForServices []string `json:"waitForServices"`
 }
 
 func main() {
@@ -32,8 +34,8 @@ func main() {
 		os.Exit(1)
 	}
 
-	if len(spec.WaitForJobs) == 0 {
-		fmt.Println("No jobs to wait for")
+	if len(spec.WaitForJobs) == 0 && len(spec.WaitForServices) == 0 {
+		fmt.Println("No jobs or services to wait for")
 		os.Exit(0)
 	}
 
@@ -52,20 +54,39 @@ func main() {
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Minute)
 	defer cancel()
 
-	fmt.Printf("Waiting for jobs to complete: %v\n", spec.WaitForJobs)
+	// Wait for all jobs to complete
+	if len(spec.WaitForJobs) > 0 {
+		fmt.Printf("Waiting for jobs to complete: %v\n", spec.WaitForJobs)
+		if err := waitForJobs(ctx, clientset, spec.Namespace, spec.WaitForJobs); err != nil {
+			fmt.Fprintf(os.Stderr, "%v\n", err)
+			os.Exit(1)
+		}
+		fmt.Println("All dependency jobs completed successfully")
+	}
 
+	// Wait for all services to become ready
+	if len(spec.WaitForServices) > 0 {
+		fmt.Printf("Waiting for services to become ready: %v\n", spec.WaitForServices)
+		if err := waitForServices(ctx, clientset, spec.Namespace, spec.WaitForServices); err != nil {
+			fmt.Fprintf(os.Stderr, "%v\n", err)
+			os.Exit(1)
+		}
+		fmt.Println("All dependency services are ready")
+	}
+}
+
+func waitForJobs(ctx context.Context, clientset *kubernetes.Clientset, namespace string, jobs []string) error {
 	for {
 		allDone := true
-		for _, jobName := range spec.WaitForJobs {
-			job, err := clientset.BatchV1().Jobs(spec.Namespace).Get(ctx, jobName, metav1.GetOptions{})
+		for _, jobName := range jobs {
+			job, err := clientset.BatchV1().Jobs(namespace).Get(ctx, jobName, metav1.GetOptions{})
 			if err != nil {
 				fmt.Printf("Waiting for job %s: %v\n", jobName, err)
 				allDone = false
 				break
 			}
 			if isJobFailed(job) {
-				fmt.Fprintf(os.Stderr, "Job %s failed\n", jobName)
-				os.Exit(1)
+				return fmt.Errorf("job %s failed", jobName)
 			}
 			if !isJobComplete(job) {
 				fmt.Printf("Job %s not yet complete (succeeded=%d, failed=%d)\n",
@@ -76,17 +97,70 @@ func main() {
 		}
 
 		if allDone {
-			fmt.Println("All dependency jobs completed successfully")
-			os.Exit(0)
+			return nil
 		}
 
 		select {
 		case <-ctx.Done():
-			fmt.Fprintf(os.Stderr, "Timeout waiting for jobs to complete\n")
-			os.Exit(1)
+			return fmt.Errorf("timeout waiting for jobs to complete")
 		case <-time.After(3 * time.Second):
 		}
 	}
+}
+
+func waitForServices(ctx context.Context, clientset *kubernetes.Clientset, namespace string, services []string) error {
+	for {
+		allReady := true
+		for _, svcName := range services {
+			ready, err := isServiceReady(ctx, clientset, namespace, svcName)
+			if err != nil {
+				fmt.Printf("Waiting for service %s: %v\n", svcName, err)
+				allReady = false
+				break
+			}
+			if !ready {
+				fmt.Printf("Service %s not yet ready\n", svcName)
+				allReady = false
+				break
+			}
+		}
+
+		if allReady {
+			return nil
+		}
+
+		select {
+		case <-ctx.Done():
+			return fmt.Errorf("timeout waiting for services to become ready")
+		case <-time.After(3 * time.Second):
+		}
+	}
+}
+
+// isServiceReady checks if at least one pod for the service has Ready=True condition.
+func isServiceReady(ctx context.Context, clientset *kubernetes.Clientset, namespace, serviceName string) (bool, error) {
+	pods, err := clientset.CoreV1().Pods(namespace).List(ctx, metav1.ListOptions{
+		LabelSelector: fmt.Sprintf("kappal.io/service=%s", serviceName),
+	})
+	if err != nil {
+		return false, err
+	}
+
+	for _, pod := range pods.Items {
+		if isPodReady(&pod) {
+			return true, nil
+		}
+	}
+	return false, nil
+}
+
+func isPodReady(pod *corev1.Pod) bool {
+	for _, cond := range pod.Status.Conditions {
+		if cond.Type == corev1.PodReady && cond.Status == corev1.ConditionTrue {
+			return true
+		}
+	}
+	return false
 }
 
 func isJobComplete(job *batchv1.Job) bool {

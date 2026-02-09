@@ -125,6 +125,17 @@ func TestBuildProjectNameWithHostDir(t *testing.T) {
 	})
 }
 
+func TestBuildProjectNameHostDirComposeDirCollision(t *testing.T) {
+	// Same KAPPAL_HOST_DIR + different composeDir must produce different project names.
+	// This prevents collision for monorepos like apps/foo/ and libs/foo/.
+	t.Setenv("KAPPAL_HOST_DIR", "/home/alice/monorepo")
+	a := buildProjectName("/project/apps/foo")
+	b := buildProjectName("/project/libs/foo")
+	if a == b {
+		t.Errorf("same KAPPAL_HOST_DIR + different composeDir should produce different names; both %q", a)
+	}
+}
+
 func TestBuildProjectNameSymlinkResilience(t *testing.T) {
 	// Create a real directory and a symlink pointing to it.
 	realDir := t.TempDir()

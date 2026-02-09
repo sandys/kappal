@@ -166,6 +166,342 @@ func TestCommandVsArgsMapping(t *testing.T) {
 	})
 }
 
+func TestReadinessProbeFromHealthcheck(t *testing.T) {
+	t.Run("CMD-SHELL healthcheck generates exec readiness probe", func(t *testing.T) {
+		svc := ServiceSpec{
+			Image: "postgres:16",
+			HealthCheck: &HealthCheckSpec{
+				Test:        []string{"CMD-SHELL", "pg_isready -U postgres"},
+				Interval:    "10s",
+				Timeout:     "5s",
+				Retries:     3,
+				StartPeriod: "30s",
+			},
+		}
+
+		transformer := &Transformer{workingDir: "/tmp"}
+		deployment := transformer.generateDeployment("test", "postgres", svc, nil)
+
+		if !strings.Contains(deployment, "readinessProbe:") {
+			t.Fatal("deployment should contain readinessProbe")
+		}
+		if !strings.Contains(deployment, "exec:") {
+			t.Error("readiness probe should use exec")
+		}
+		if !strings.Contains(deployment, `"/bin/sh"`) {
+			t.Error("CMD-SHELL should use /bin/sh -c")
+		}
+		if !strings.Contains(deployment, `"pg_isready -U postgres"`) {
+			t.Error("probe should contain healthcheck command")
+		}
+		if !strings.Contains(deployment, "periodSeconds: 10") {
+			t.Error("interval should map to periodSeconds")
+		}
+		if !strings.Contains(deployment, "timeoutSeconds: 5") {
+			t.Error("timeout should map to timeoutSeconds")
+		}
+		if !strings.Contains(deployment, "failureThreshold: 3") {
+			t.Error("retries should map to failureThreshold")
+		}
+		if !strings.Contains(deployment, "initialDelaySeconds: 30") {
+			t.Error("start_period should map to initialDelaySeconds")
+		}
+	})
+
+	t.Run("CMD healthcheck generates exec probe with args", func(t *testing.T) {
+		svc := ServiceSpec{
+			Image: "redis:7",
+			HealthCheck: &HealthCheckSpec{
+				Test:    []string{"CMD", "redis-cli", "ping"},
+				Retries: 5,
+			},
+		}
+
+		transformer := &Transformer{workingDir: "/tmp"}
+		deployment := transformer.generateDeployment("test", "redis", svc, nil)
+
+		if !strings.Contains(deployment, "readinessProbe:") {
+			t.Fatal("deployment should contain readinessProbe")
+		}
+		if !strings.Contains(deployment, `"redis-cli"`) {
+			t.Error("CMD probe should use command args directly")
+		}
+		if !strings.Contains(deployment, `"ping"`) {
+			t.Error("CMD probe should include all args")
+		}
+		// CMD should NOT wrap in /bin/sh -c
+		if strings.Contains(deployment, `"/bin/sh"`) {
+			t.Error("CMD probe should not use /bin/sh")
+		}
+		if !strings.Contains(deployment, "failureThreshold: 5") {
+			t.Error("retries should map to failureThreshold")
+		}
+	})
+
+	t.Run("NONE healthcheck generates no probe", func(t *testing.T) {
+		svc := ServiceSpec{
+			Image: "myapp:latest",
+			HealthCheck: &HealthCheckSpec{
+				Test: []string{"NONE"},
+			},
+		}
+
+		transformer := &Transformer{workingDir: "/tmp"}
+		deployment := transformer.generateDeployment("test", "myapp", svc, nil)
+
+		if strings.Contains(deployment, "readinessProbe:") {
+			t.Error("NONE healthcheck should not produce a readiness probe")
+		}
+	})
+
+	t.Run("no healthcheck generates no probe", func(t *testing.T) {
+		svc := ServiceSpec{
+			Image: "nginx:latest",
+		}
+
+		transformer := &Transformer{workingDir: "/tmp"}
+		deployment := transformer.generateDeployment("test", "nginx", svc, nil)
+
+		if strings.Contains(deployment, "readinessProbe:") {
+			t.Error("no healthcheck should not produce a readiness probe")
+		}
+	})
+}
+
+func TestInitContainerServiceHealthy(t *testing.T) {
+	allServices := map[string]ServiceSpec{
+		"postgres": {Image: "postgres:16", IsJob: false},
+		"redis":    {Image: "redis:7", IsJob: false},
+		"migrate":  {Image: "migrate:latest", IsJob: true},
+	}
+
+	t.Run("service_healthy generates init with waitForServices", func(t *testing.T) {
+		svc := ServiceSpec{
+			Image: "app:latest",
+			DependsOn: []DependsOnSpec{
+				{Service: "postgres", Condition: "service_healthy"},
+			},
+		}
+
+		transformer := &Transformer{workingDir: "/tmp"}
+		initSpec := transformer.buildInitContainerSpec("test", svc, allServices)
+
+		if initSpec == "" {
+			t.Fatal("service_healthy dep should generate init container")
+		}
+		if !strings.Contains(initSpec, "wait-for-deps") {
+			t.Error("init container should be named wait-for-deps")
+		}
+		if !strings.Contains(initSpec, `"waitForServices":["postgres"]`) {
+			t.Error("init spec should include waitForServices with postgres")
+		}
+		if !strings.Contains(initSpec, `"waitForJobs":[]`) {
+			t.Error("init spec should include empty waitForJobs")
+		}
+	})
+
+	t.Run("service_completed_successfully generates init with waitForJobs", func(t *testing.T) {
+		svc := ServiceSpec{
+			Image: "app:latest",
+			DependsOn: []DependsOnSpec{
+				{Service: "migrate", Condition: "service_completed_successfully"},
+			},
+		}
+
+		transformer := &Transformer{workingDir: "/tmp"}
+		initSpec := transformer.buildInitContainerSpec("test", svc, allServices)
+
+		if initSpec == "" {
+			t.Fatal("service_completed_successfully dep should generate init container")
+		}
+		if !strings.Contains(initSpec, `"waitForJobs":["migrate"]`) {
+			t.Error("init spec should include waitForJobs with migrate")
+		}
+		if !strings.Contains(initSpec, `"waitForServices":[]`) {
+			t.Error("init spec should include empty waitForServices")
+		}
+	})
+
+	t.Run("both conditions combined", func(t *testing.T) {
+		svc := ServiceSpec{
+			Image: "app:latest",
+			DependsOn: []DependsOnSpec{
+				{Service: "postgres", Condition: "service_healthy"},
+				{Service: "migrate", Condition: "service_completed_successfully"},
+			},
+		}
+
+		transformer := &Transformer{workingDir: "/tmp"}
+		initSpec := transformer.buildInitContainerSpec("test", svc, allServices)
+
+		if initSpec == "" {
+			t.Fatal("combined deps should generate init container")
+		}
+		if !strings.Contains(initSpec, `"waitForJobs":["migrate"]`) {
+			t.Error("init spec should include waitForJobs")
+		}
+		if !strings.Contains(initSpec, `"waitForServices":["postgres"]`) {
+			t.Error("init spec should include waitForServices")
+		}
+	})
+
+	t.Run("service_healthy on a Job is ignored", func(t *testing.T) {
+		svc := ServiceSpec{
+			Image: "app:latest",
+			DependsOn: []DependsOnSpec{
+				{Service: "migrate", Condition: "service_healthy"},
+			},
+		}
+
+		transformer := &Transformer{workingDir: "/tmp"}
+		initSpec := transformer.buildInitContainerSpec("test", svc, allServices)
+
+		if initSpec != "" {
+			t.Error("service_healthy on a Job should not generate init container")
+		}
+	})
+
+	t.Run("service_started generates no init container", func(t *testing.T) {
+		svc := ServiceSpec{
+			Image: "app:latest",
+			DependsOn: []DependsOnSpec{
+				{Service: "postgres", Condition: "service_started"},
+			},
+		}
+
+		transformer := &Transformer{workingDir: "/tmp"}
+		initSpec := transformer.buildInitContainerSpec("test", svc, allServices)
+
+		if initSpec != "" {
+			t.Error("service_started should not generate init container")
+		}
+	})
+}
+
+func TestRBACGenerationForDependencies(t *testing.T) {
+	transformer := &Transformer{workingDir: "/tmp"}
+
+	t.Run("job dependency generates batch/jobs RBAC", func(t *testing.T) {
+		rbac := transformer.generateInitReaderRBAC("test", true, false)
+
+		if !strings.Contains(rbac, `apiGroups: ["batch"]`) {
+			t.Error("should include batch apiGroup for jobs")
+		}
+		if !strings.Contains(rbac, `resources: ["jobs"]`) {
+			t.Error("should include jobs resource")
+		}
+		if strings.Contains(rbac, `resources: ["pods"]`) {
+			t.Error("should not include pods when only job deps")
+		}
+		if !strings.Contains(rbac, "kappal-init-reader") {
+			t.Error("role should be named kappal-init-reader")
+		}
+	})
+
+	t.Run("service_healthy dependency generates pods RBAC", func(t *testing.T) {
+		rbac := transformer.generateInitReaderRBAC("test", false, true)
+
+		if !strings.Contains(rbac, `resources: ["pods"]`) {
+			t.Error("should include pods resource")
+		}
+		if !strings.Contains(rbac, `apiGroups: [""]`) {
+			t.Error("should include core apiGroup for pods")
+		}
+		if strings.Contains(rbac, `resources: ["jobs"]`) {
+			t.Error("should not include jobs when only service deps")
+		}
+	})
+
+	t.Run("both dependencies generate combined RBAC", func(t *testing.T) {
+		rbac := transformer.generateInitReaderRBAC("test", true, true)
+
+		if !strings.Contains(rbac, `resources: ["jobs"]`) {
+			t.Error("should include jobs resource")
+		}
+		if !strings.Contains(rbac, `resources: ["pods"]`) {
+			t.Error("should include pods resource")
+		}
+	})
+}
+
+func TestDurationToSeconds(t *testing.T) {
+	tests := []struct {
+		input    string
+		expected int
+	}{
+		{"10s", 10},
+		{"5s", 5},
+		{"1m", 60},
+		{"1m30s", 90},
+		{"500ms", 1},   // rounds up to minimum 1
+		{"0s", 0},      // zero returns 0
+		{"invalid", 0}, // invalid returns 0
+		{"", 0},        // empty returns 0
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.input, func(t *testing.T) {
+			result := durationToSeconds(tt.input)
+			if result != tt.expected {
+				t.Errorf("durationToSeconds(%q) = %d, want %d", tt.input, result, tt.expected)
+			}
+		})
+	}
+}
+
+func TestGenerateManifestsServiceHealthyEndToEnd(t *testing.T) {
+	// End-to-end: a compose project with service_healthy dependency should produce
+	// correct readiness probe, init container, and RBAC in the combined manifests.
+	allServices := map[string]ServiceSpec{
+		"postgres": {
+			Image: "postgres:16",
+			HealthCheck: &HealthCheckSpec{
+				Test:     []string{"CMD-SHELL", "pg_isready -U postgres"},
+				Interval: "10s",
+				Timeout:  "5s",
+				Retries:  3,
+			},
+		},
+		"app": {
+			Image: "myapp:latest",
+			DependsOn: []DependsOnSpec{
+				{Service: "postgres", Condition: "service_healthy"},
+			},
+		},
+	}
+
+	transformer := &Transformer{workingDir: "/tmp"}
+
+	// Check postgres deployment has readiness probe
+	pgDeployment := transformer.generateDeployment("test", "postgres", allServices["postgres"], allServices)
+	if !strings.Contains(pgDeployment, "readinessProbe:") {
+		t.Error("postgres deployment should have readinessProbe from healthcheck")
+	}
+	if !strings.Contains(pgDeployment, "pg_isready") {
+		t.Error("readiness probe should contain the healthcheck command")
+	}
+
+	// Check app deployment has init container waiting for postgres
+	appDeployment := transformer.generateDeployment("test", "app", allServices["app"], allServices)
+	if !strings.Contains(appDeployment, "initContainers:") {
+		t.Error("app deployment should have init containers")
+	}
+	if !strings.Contains(appDeployment, "wait-for-deps") {
+		t.Error("init container should be named wait-for-deps")
+	}
+	if !strings.Contains(appDeployment, "waitForServices") {
+		t.Error("init container spec should reference waitForServices")
+	}
+	if !strings.Contains(appDeployment, "postgres") {
+		t.Error("init container should wait for postgres")
+	}
+
+	// App should NOT have a readiness probe (no healthcheck defined)
+	if strings.Contains(appDeployment, "readinessProbe:") {
+		t.Error("app deployment should not have readinessProbe (no healthcheck)")
+	}
+}
+
 func TestServicePortUsesTargetNotPublished(t *testing.T) {
 	// When published port differs from target port, the K8s Service should use
 	// the target (container) port for both port and targetPort.

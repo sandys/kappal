@@ -460,6 +460,38 @@ func (c *Client) ContainerListByLabel(ctx context.Context, key, value string) ([
 	return entries, nil
 }
 
+// ContainerListByLabels finds containers matching all given label key=value pairs.
+func (c *Client) ContainerListByLabels(ctx context.Context, labels map[string]string) ([]ContainerListEntry, error) {
+	f := dockerfilters.NewArgs()
+	for k, v := range labels {
+		f.Add("label", fmt.Sprintf("%s=%s", k, v))
+	}
+	containers, err := c.cli.ContainerList(ctx, types.ContainerListOptions{
+		All:     true,
+		Filters: f,
+	})
+	if err != nil {
+		return nil, fmt.Errorf("failed to list containers by labels: %w", err)
+	}
+	var entries []ContainerListEntry
+	for _, ctr := range containers {
+		name := ""
+		if len(ctr.Names) > 0 {
+			name = strings.TrimPrefix(ctr.Names[0], "/")
+		}
+		status := "stopped"
+		if ctr.State == "running" {
+			status = "running"
+		}
+		entries = append(entries, ContainerListEntry{
+			Name:   name,
+			ID:     ctr.ID,
+			Status: status,
+		})
+	}
+	return entries, nil
+}
+
 // NetworkListByLabel finds networks matching a label key=value pair.
 // Returns the network names.
 func (c *Client) NetworkListByLabel(ctx context.Context, key, value string) ([]string, error) {
@@ -473,6 +505,64 @@ func (c *Client) NetworkListByLabel(ctx context.Context, key, value string) ([]s
 	var names []string
 	for _, n := range networks {
 		names = append(names, n.Name)
+	}
+	return names, nil
+}
+
+// ContainerListByLabelKey finds all containers that have a given label key (any value).
+func (c *Client) ContainerListByLabelKey(ctx context.Context, key string) ([]ContainerListEntry, error) {
+	containers, err := c.cli.ContainerList(ctx, types.ContainerListOptions{
+		All:     true,
+		Filters: filtersArgs("label", key),
+	})
+	if err != nil {
+		return nil, fmt.Errorf("failed to list containers by label key %s: %w", key, err)
+	}
+	var entries []ContainerListEntry
+	for _, ctr := range containers {
+		name := ""
+		if len(ctr.Names) > 0 {
+			name = strings.TrimPrefix(ctr.Names[0], "/")
+		}
+		status := "stopped"
+		if ctr.State == "running" {
+			status = "running"
+		}
+		entries = append(entries, ContainerListEntry{
+			Name:   name,
+			ID:     ctr.ID,
+			Status: status,
+		})
+	}
+	return entries, nil
+}
+
+// NetworkListByLabelKey finds all networks that have a given label key (any value).
+func (c *Client) NetworkListByLabelKey(ctx context.Context, key string) ([]string, error) {
+	networks, err := c.cli.NetworkList(ctx, types.NetworkListOptions{
+		Filters: filtersArgs("label", key),
+	})
+	if err != nil {
+		return nil, fmt.Errorf("failed to list networks by label key %s: %w", key, err)
+	}
+	var names []string
+	for _, n := range networks {
+		names = append(names, n.Name)
+	}
+	return names, nil
+}
+
+// VolumeListByPrefix finds all volumes whose names start with the given prefix.
+func (c *Client) VolumeListByPrefix(ctx context.Context, prefix string) ([]string, error) {
+	resp, err := c.cli.VolumeList(ctx, volume.ListOptions{})
+	if err != nil {
+		return nil, fmt.Errorf("failed to list volumes: %w", err)
+	}
+	var names []string
+	for _, v := range resp.Volumes {
+		if strings.HasPrefix(v.Name, prefix) {
+			names = append(names, v.Name)
+		}
 	}
 	return names, nil
 }

@@ -43,7 +43,7 @@ func buildProjectName(composeDir string) string {
 		if base == "" {
 			base = "default"
 		}
-		return base + "-" + dirHash(hostDir)
+		return base + "-" + dirHash(hostDir+":"+composeDir)
 	}
 
 	absDir, err := filepath.EvalSymlinks(composeDir)

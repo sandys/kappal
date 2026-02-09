@@ -14,10 +14,7 @@ import (
 	"github.com/spf13/cobra"
 )
 
-var (
-	psFormat string
-	psAll    bool
-)
+var psFormat string
 
 var psCmd = &cobra.Command{
 	Use:   "ps",
@@ -38,7 +35,6 @@ For richer machine-readable output with replicas, pod IPs, and K3s state, use
 
 Flags:
   -o, --format <fmt>   Output format: table (default), json, yaml
-  -a, --all            Show all containers including stopped
   -f <path>            Compose file path (default: docker-compose.yaml)
   -p <name>            Override project name
 
@@ -52,7 +48,6 @@ Examples:
 
 func init() {
 	psCmd.Flags().StringVarP(&psFormat, "format", "o", "table", "Output format (table, json, yaml)")
-	psCmd.Flags().BoolVarP(&psAll, "all", "a", false, "Show all containers (including stopped)")
 }
 
 // psEntry is the simplified service status for ps output.

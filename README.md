@@ -167,6 +167,8 @@ kappal down -v
 | Profiles | ✅ | `profiles: [debug]` excluded from default `up` |
 | Healthchecks | 🚧 | Planned |
 
+**Note:** Duplicate container port/protocol across services (e.g. two services both exposing `80/tcp`) is rejected with an error.
+
 ## Examples
 
 ### Compose File in Subdirectory
@@ -196,7 +198,7 @@ If your `docker-compose.yml` references parent directories (e.g., `build: contex
 
 ```bash
 # For monorepos, create a project-specific alias
-alias kappal-myproject='docker run --rm -v /var/run/docker.sock:/var/run/docker.sock -v "/path/to/project/root:/project" -w /project/path/to/compose/dir --network host ghcr.io/sandys/kappal:latest'
+alias kappal-myproject='docker run --rm -v /var/run/docker.sock:/var/run/docker.sock -v "/path/to/project/root:/project" -w /project/path/to/compose/dir -e KAPPAL_HOST_DIR="/path/to/project/root" --network host ghcr.io/sandys/kappal:latest'
 
 # Then use normally
 kappal-myproject up --build
@@ -240,7 +242,7 @@ Kappal includes a skill file ([`skills/kappal/SKILL.md`](skills/kappal/SKILL.md)
 
 ## Project Naming
 
-Kappal derives the project name from the compose file's directory path: `<basename>-<8-char-hash>`. This means two directories named `myapp` in different locations (e.g. git worktrees) get distinct project names and never interfere with each other. Symlinks to the same physical directory produce the same name.
+Kappal derives the project name from the compose file's directory path: `<basename>-<8-char-hash>`. This means two directories named `myapp` in different locations (e.g. git worktrees) get distinct project names and never interfere with each other. When running directly on the host, symlinks to the same physical directory produce the same name. In Docker wrapper mode, the caller should pass a resolved (canonical) path via `KAPPAL_HOST_DIR`.
 
 Override with `-p <name>` if you need a specific project name.
 

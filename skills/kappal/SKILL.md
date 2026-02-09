@@ -338,7 +338,7 @@ These are **separate concerns** — never confuse them:
 
 ## 8. Project Naming
 
-Kappal derives the project name from the compose file's directory: `<sanitised-basename>-<8-char-sha256-hash>`. This makes names **worktree-safe** — two directories with the same basename (e.g. git worktrees, multiple clones) get different project names and never share K3s containers or networks. Symlinks to the same physical directory produce the same name.
+Kappal derives the project name from the compose file's directory: `<sanitised-basename>-<8-char-sha256-hash>`. This makes names **worktree-safe** — two directories with the same basename (e.g. git worktrees, multiple clones) get different project names and never share K3s containers or networks. When running directly on the host, symlinks to the same physical directory produce the same name. In Docker wrapper mode, `KAPPAL_HOST_DIR` should be a resolved path (see Pitfall #6).
 
 Override with `-p <name>` when you need a fixed name (e.g. scripting, CI).
 
@@ -358,6 +358,6 @@ Override with `-p <name>` when you need a fixed name (e.g. scripting, CI).
 
 5. **Port conflicts** — Kappal uses `--network host`, so published ports bind directly to the host. If a port is already in use, the service will fail to start. Check with `ss -tlnp` or `lsof -i :<port>` before deploying.
 
-6. **`KAPPAL_HOST_DIR` env var** — Required when running kappal via `docker run`. It tells kappal the real host path of the project directory so the project name is derived from the host path (not the container's `/project`). Without it, all projects would get the same name. Always include `-e KAPPAL_HOST_DIR="<project-root>"` in docker run commands.
+6. **`KAPPAL_HOST_DIR` env var** — Required when running kappal via `docker run`. It tells kappal the real host path of the project directory so the project name is derived from the host path (not the container's `/project`). Without it, all projects would get the same name. Always include `-e KAPPAL_HOST_DIR="<project-root>"` in docker run commands. **Important:** `KAPPAL_HOST_DIR` should be a resolved (non-symlinked) path. Symlink resolution only works when kappal runs directly on the host; inside Docker, the caller must pass the canonical path.
 
 7. **Duplicate port/protocol** — If a compose file maps the same container port and protocol twice (e.g. two services both expose `80/tcp`), kappal will return an error instead of silently overwriting.

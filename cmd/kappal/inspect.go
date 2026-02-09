@@ -72,10 +72,16 @@ var inspectSchema = map[string]string{
 	"services[].ports[].host":      "Port number on the Docker host. Use this for curl/HTTP requests from outside.",
 	"services[].ports[].container": "Target port for the K8s Service and container (the compose 'target' value). Kappal sets both the K8s Service port and targetPort to this value.",
 	"services[].ports[].protocol":  "Transport protocol. Values: 'tcp', 'udp'.",
-	"services[].pods":              "Individual pod instances for this service. For Deployments, only Running/Pending pods are shown. For Jobs, all pods (including Succeeded/Failed) are shown to reflect execution history.",
-	"services[].pods[].name":       "K8s pod name (auto-generated, includes random suffix).",
-	"services[].pods[].status":     "K8s pod phase. Deployment pods: 'Running', 'Pending'. Job pods: 'Running', 'Pending', 'Succeeded', 'Failed', 'Unknown'.",
-	"services[].pods[].ip":         "Pod's cluster-internal IP address on the K3s overlay network.",
+	"services[].healthcheck":              "Compose healthcheck definition, mapped to a K8s readiness probe. Only present if the compose service defines a healthcheck.",
+	"services[].healthcheck.test":         "Healthcheck command. Format: ['CMD-SHELL', 'command'] or ['CMD', 'arg1', ...'].",
+	"services[].healthcheck.interval":     "Time between probe attempts (e.g. '10s'). Maps to K8s readinessProbe.periodSeconds.",
+	"services[].healthcheck.timeout":      "Max time for a single probe (e.g. '5s'). Maps to K8s readinessProbe.timeoutSeconds.",
+	"services[].healthcheck.retries":      "Consecutive failures before marking unhealthy. Maps to K8s readinessProbe.failureThreshold.",
+	"services[].healthcheck.start_period": "Grace period before probes count (e.g. '30s'). Maps to K8s readinessProbe.initialDelaySeconds.",
+	"services[].pods":                     "Individual pod instances for this service. For Deployments, only Running/Pending pods are shown. For Jobs, all pods (including Succeeded/Failed) are shown to reflect execution history.",
+	"services[].pods[].name":              "K8s pod name (auto-generated, includes random suffix).",
+	"services[].pods[].status":            "K8s pod phase. Deployment pods: 'Running', 'Pending'. Job pods: 'Running', 'Pending', 'Succeeded', 'Failed', 'Unknown'.",
+	"services[].pods[].ip":                "Pod's cluster-internal IP address on the K3s overlay network.",
 }
 
 type inspectK3s struct {
@@ -85,13 +91,22 @@ type inspectK3s struct {
 }
 
 type inspectService struct {
-	Name     string           `json:"name"`
-	Kind     string           `json:"kind"`
-	Image    string           `json:"image"`
-	Status   string           `json:"status"`
-	Replicas *inspectReplicas `json:"replicas,omitempty"`
-	Ports    []inspectPort    `json:"ports,omitempty"`
-	Pods     []inspectPod     `json:"pods"`
+	Name        string              `json:"name"`
+	Kind        string              `json:"kind"`
+	Image       string              `json:"image"`
+	Status      string              `json:"status"`
+	Replicas    *inspectReplicas    `json:"replicas,omitempty"`
+	Ports       []inspectPort       `json:"ports,omitempty"`
+	HealthCheck *inspectHealthCheck `json:"healthcheck,omitempty"`
+	Pods        []inspectPod        `json:"pods"`
+}
+
+type inspectHealthCheck struct {
+	Test        []string `json:"test"`
+	Interval    string   `json:"interval,omitempty"`
+	Timeout     string   `json:"timeout,omitempty"`
+	Retries     int      `json:"retries,omitempty"`
+	StartPeriod string   `json:"start_period,omitempty"`
 }
 
 type inspectReplicas struct {
@@ -175,6 +190,15 @@ func runInspect(cmd *cobra.Command, args []string) error {
 				Container: p.Container,
 				Protocol:  p.Protocol,
 			})
+		}
+		if svc.HealthCheck != nil {
+			iSvc.HealthCheck = &inspectHealthCheck{
+				Test:        svc.HealthCheck.Test,
+				Interval:    svc.HealthCheck.Interval,
+				Timeout:     svc.HealthCheck.Timeout,
+				Retries:     svc.HealthCheck.Retries,
+				StartPeriod: svc.HealthCheck.StartPeriod,
+			}
 		}
 		result.Services = append(result.Services, iSvc)
 	}

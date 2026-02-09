@@ -165,28 +165,34 @@ func runUp(cmd *cobra.Command, args []string) error {
 		}
 	}
 
-	// Load kappal init image into K3s if any service has Job dependencies
-	// (needed for init containers that wait for job completion)
-	hasJobDeps := false
+	// Load kappal init image into K3s if any service has init container dependencies
+	// (service_completed_successfully for Jobs, service_healthy for Deployments)
+	hasInitDeps := false
 	for _, svc := range project.Services {
 		if len(svc.Profiles) > 0 {
 			continue
 		}
 		for depName, depConfig := range svc.DependsOn {
-			if depConfig.Condition == "service_completed_successfully" {
-				// Check if the dependency is a Job (restart: "no")
+			switch depConfig.Condition {
+			case "service_completed_successfully":
 				if depSvc, ok := project.Services[depName]; ok && depSvc.Restart == "no" {
-					hasJobDeps = true
-					break
+					hasInitDeps = true
+				}
+			case "service_healthy":
+				if depSvc, ok := project.Services[depName]; ok && depSvc.Restart != "no" {
+					hasInitDeps = true
 				}
 			}
+			if hasInitDeps {
+				break
+			}
 		}
-		if hasJobDeps {
+		if hasInitDeps {
 			break
 		}
 	}
-	if hasJobDeps {
-		if err := k3sManager.LoadInitImage(ctx, transform.KappalInitImage); err != nil {
+	if hasInitDeps {
+		if err := k3sManager.LoadInitImage(ctx, transform.GetInitImage()); err != nil {
 			fmt.Fprintf(os.Stderr, "Warning: could not pre-load init image: %v\n", err)
 		}
 	}

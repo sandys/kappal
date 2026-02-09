@@ -15,7 +15,6 @@ import (
 var (
 	execInteractive bool
 	execTTY         bool
-	execDetach      bool
 	execIndex       int
 )
 
@@ -39,7 +38,6 @@ Examples:
 func init() {
 	execCmd.Flags().BoolVarP(&execInteractive, "interactive", "i", false, "Keep STDIN open")
 	execCmd.Flags().BoolVarP(&execTTY, "tty", "t", false, "Allocate a pseudo-TTY")
-	execCmd.Flags().BoolVarP(&execDetach, "detach", "d", false, "Detached mode: run command in background")
 	execCmd.Flags().IntVar(&execIndex, "index", 0, "Index of the container if service has multiple replicas")
 	// Disable interspersed flags so flags after SERVICE are passed to the command
 	// This allows: kappal exec app sh -c 'echo hello' (without needing --)
