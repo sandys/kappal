@@ -47,12 +47,12 @@ func NewTransformer(project *types.Project) *Transformer {
 
 // ComposeSpec is the simplified compose spec for Jsonnet
 type ComposeSpec struct {
-	Name     string                    `json:"name"`
-	Services map[string]ServiceSpec    `json:"services"`
-	Volumes  map[string]VolumeSpec     `json:"volumes,omitempty"`
-	Networks map[string]NetworkSpec    `json:"networks,omitempty"`
-	Secrets  map[string]SecretSpec     `json:"secrets,omitempty"`
-	Configs  map[string]ConfigSpec     `json:"configs,omitempty"`
+	Name     string                 `json:"name"`
+	Services map[string]ServiceSpec `json:"services"`
+	Volumes  map[string]VolumeSpec  `json:"volumes,omitempty"`
+	Networks map[string]NetworkSpec `json:"networks,omitempty"`
+	Secrets  map[string]SecretSpec  `json:"secrets,omitempty"`
+	Configs  map[string]ConfigSpec  `json:"configs,omitempty"`
 }
 
 // DependsOnSpec represents a dependency with its condition
@@ -795,6 +795,16 @@ func buildReadinessProbe(hc *HealthCheckSpec) string {
 func (t *Transformer) buildInitContainerSpec(projectName string, svc ServiceSpec, allServices map[string]ServiceSpec) string {
 	var waitForJobs []string
 	var waitForServices []string
+	var prepareWritablePaths []string
+	var initVolumeMountLines []string
+
+	for i, v := range svc.Volumes {
+		if v.Type == "bind" && !v.ReadOnly {
+			prepareWritablePaths = append(prepareWritablePaths, v.Target)
+			initVolumeMountLines = append(initVolumeMountLines, fmt.Sprintf("        - name: vol-%d\n          mountPath: \"%s\"", i, v.Target))
+		}
+	}
+
 	for _, dep := range svc.DependsOn {
 		switch dep.Condition {
 		case "service_completed_successfully":
@@ -808,7 +818,7 @@ func (t *Transformer) buildInitContainerSpec(projectName string, svc ServiceSpec
 		}
 	}
 
-	if len(waitForJobs) == 0 && len(waitForServices) == 0 {
+	if len(waitForJobs) == 0 && len(waitForServices) == 0 && len(prepareWritablePaths) == 0 {
 		return ""
 	}
 
@@ -823,10 +833,10 @@ func (t *Transformer) buildInitContainerSpec(projectName string, svc ServiceSpec
 		return "[" + strings.Join(parts, ",") + "]"
 	}
 
-	specJSON := fmt.Sprintf(`{"namespace":"%s","waitForJobs":%s,"waitForServices":%s}`,
-		projectName, toJSONArray(waitForJobs), toJSONArray(waitForServices))
+	specJSON := fmt.Sprintf(`{"namespace":"%s","waitForJobs":%s,"waitForServices":%s,"prepareWritablePaths":%s}`,
+		projectName, toJSONArray(waitForJobs), toJSONArray(waitForServices), toJSONArray(prepareWritablePaths))
 
-	return fmt.Sprintf(`
+	initSpec := fmt.Sprintf(`
       initContainers:
       - name: wait-for-deps
         image: %s
@@ -835,6 +845,17 @@ func (t *Transformer) buildInitContainerSpec(projectName string, svc ServiceSpec
         env:
         - name: KAPPAL_INIT_SPEC
           value: '%s'`, GetInitImage(), specJSON)
+
+	if len(initVolumeMountLines) > 0 {
+		initSpec += `
+        securityContext:
+          runAsUser: 0
+          runAsGroup: 0
+        volumeMounts:
+` + strings.Join(initVolumeMountLines, "\n")
+	}
+
+	return initSpec
 }
 
 func (t *Transformer) generateDeployment(projectName, serviceName string, svc ServiceSpec, allServices map[string]ServiceSpec) string {

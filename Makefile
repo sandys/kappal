@@ -1,4 +1,4 @@
-.PHONY: build test clean docker-build docker-test conformance lint-ux lint-compose lint-adhoc lint-k8s lint-volumes lint-exec-docker lint-all
+.PHONY: build test clean docker-build docker-test conformance lint-ux lint-compose lint-adhoc lint-k8s lint-volumes lint-exec-docker lint-compat lint-all
 
 # Build binary in Docker
 build:
@@ -71,5 +71,10 @@ lint-exec-docker:
 	@chmod +x scripts/lint-no-exec-docker.sh
 	@./scripts/lint-no-exec-docker.sh
 
+# Lint compatibility mode guardrails for third-party compose support
+lint-compat:
+	@chmod +x scripts/lint-compat-mode.sh
+	@./scripts/lint-compat-mode.sh
+
 # Run all custom lints
-lint-all: lint lint-ux lint-compose lint-adhoc lint-k8s lint-volumes lint-exec-docker
+lint-all: lint lint-ux lint-compose lint-adhoc lint-k8s lint-volumes lint-exec-docker lint-compat

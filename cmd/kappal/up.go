@@ -5,8 +5,10 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"strconv"
 	"time"
 
+	"github.com/compose-spec/compose-go/v2/types"
 	"github.com/kappal-app/kappal/pkg/compose"
 	"github.com/kappal-app/kappal/pkg/k3s"
 	"github.com/kappal-app/kappal/pkg/k8s"
@@ -51,7 +53,7 @@ Examples:
   kappal up --build -d          Build images then start
   kappal up --timeout 600 -d    Wait up to 10 minutes for readiness
   kappal -p myapp up -d         Start with explicit project name`,
-	RunE:  runUp,
+	RunE: runUp,
 }
 
 func init() {
@@ -82,7 +84,12 @@ func runUp(cmd *cobra.Command, args []string) error {
 		return fmt.Errorf("failed to load compose file: %w", err)
 	}
 
+	compat := analyzeCompatibility(project)
+
 	fmt.Printf("Project: %s\n", project.Name)
+	for _, note := range compat.Notes {
+		fmt.Printf("Compatibility check: %s\n", note)
+	}
 
 	// Create workspace directory
 	workspaceDir := filepath.Join(projectDir, ".kappal")
@@ -121,7 +128,9 @@ func runUp(cmd *cobra.Command, args []string) error {
 		for _, p := range svc.Ports {
 			published := p.Target
 			if p.Published != "" {
-				fmt.Sscanf(p.Published, "%d", &published)
+				if v, err := strconv.ParseUint(p.Published, 10, 32); err == nil {
+					published = uint32(v)
+				}
 			}
 			proto := p.Protocol
 			if proto == "" {
@@ -165,33 +174,7 @@ func runUp(cmd *cobra.Command, args []string) error {
 		}
 	}
 
-	// Load kappal init image into K3s if any service has init container dependencies
-	// (service_completed_successfully for Jobs, service_healthy for Deployments)
-	hasInitDeps := false
-	for _, svc := range project.Services {
-		if len(svc.Profiles) > 0 {
-			continue
-		}
-		for depName, depConfig := range svc.DependsOn {
-			switch depConfig.Condition {
-			case "service_completed_successfully":
-				if depSvc, ok := project.Services[depName]; ok && depSvc.Restart == "no" {
-					hasInitDeps = true
-				}
-			case "service_healthy":
-				if depSvc, ok := project.Services[depName]; ok && depSvc.Restart != "no" {
-					hasInitDeps = true
-				}
-			}
-			if hasInitDeps {
-				break
-			}
-		}
-		if hasInitDeps {
-			break
-		}
-	}
-	if hasInitDeps {
+	if compat.NeedInitImage {
 		if err := k3sManager.LoadInitImage(ctx, transform.GetInitImage()); err != nil {
 			fmt.Fprintf(os.Stderr, "Warning: could not pre-load init image: %v\n", err)
 		}
@@ -229,4 +212,71 @@ func runUp(cmd *cobra.Command, args []string) error {
 	}
 
 	return nil
+}
+
+type compatibilityReport struct {
+	NeedInitImage bool
+	Notes         []string
+}
+
+func analyzeCompatibility(project *types.Project) compatibilityReport {
+	report := compatibilityReport{}
+	seen := map[string]struct{}{}
+	addNote := func(msg string) {
+		if _, ok := seen[msg]; ok {
+			return
+		}
+		seen[msg] = struct{}{}
+		report.Notes = append(report.Notes, msg)
+	}
+
+	for _, svc := range project.Services {
+		if len(svc.Profiles) > 0 {
+			continue
+		}
+
+		hasWritableBind := false
+		for _, vol := range svc.Volumes {
+			if vol.Type == "bind" && !vol.ReadOnly {
+				report.NeedInitImage = true
+				hasWritableBind = true
+				break
+			}
+		}
+		if hasWritableBind {
+			addNote(fmt.Sprintf("service %q uses writable bind mounts; enabling compatibility init for permissions", svc.Name))
+		}
+
+		for depName, depConfig := range svc.DependsOn {
+			depSvc, ok := project.Services[depName]
+			if !ok {
+				addNote(fmt.Sprintf("service %q depends_on %q which is not defined in compose", svc.Name, depName))
+				continue
+			}
+			if len(depSvc.Profiles) > 0 {
+				addNote(fmt.Sprintf("service %q depends_on profiled service %q; enable matching profile(s) if needed", svc.Name, depName))
+				continue
+			}
+
+			switch depConfig.Condition {
+			case "service_completed_successfully":
+				if depSvc.Restart == "no" {
+					report.NeedInitImage = true
+				}
+			case "service_healthy":
+				if depSvc.Restart != "no" {
+					report.NeedInitImage = true
+				}
+			}
+		}
+	}
+
+	return report
+}
+
+// shouldLoadInitImage returns true when any active service needs kappal-init:
+// - dependency waits (service_completed_successfully/service_healthy)
+// - writable bind mount preparation for non-root workloads
+func shouldLoadInitImage(project *types.Project) bool {
+	return analyzeCompatibility(project).NeedInitImage
 }

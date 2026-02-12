@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"os"
+	"path/filepath"
 	"time"
 
 	batchv1 "k8s.io/api/batch/v1"
@@ -16,9 +17,10 @@ import (
 
 // InitSpec defines what this init container should wait for.
 type InitSpec struct {
-	Namespace       string   `json:"namespace"`
-	WaitForJobs     []string `json:"waitForJobs"`
-	WaitForServices []string `json:"waitForServices"`
+	Namespace            string   `json:"namespace"`
+	WaitForJobs          []string `json:"waitForJobs"`
+	WaitForServices      []string `json:"waitForServices"`
+	PrepareWritablePaths []string `json:"prepareWritablePaths,omitempty"`
 }
 
 func main() {
@@ -34,9 +36,17 @@ func main() {
 		os.Exit(1)
 	}
 
-	if len(spec.WaitForJobs) == 0 && len(spec.WaitForServices) == 0 {
-		fmt.Println("No jobs or services to wait for")
+	if len(spec.WaitForJobs) == 0 && len(spec.WaitForServices) == 0 && len(spec.PrepareWritablePaths) == 0 {
+		fmt.Println("No jobs/services to wait for and no writable paths to prepare")
 		os.Exit(0)
+	}
+
+	if len(spec.PrepareWritablePaths) > 0 {
+		fmt.Printf("Preparing writable paths: %v\n", spec.PrepareWritablePaths)
+		if err := prepareWritablePaths(spec.PrepareWritablePaths); err != nil {
+			fmt.Fprintf(os.Stderr, "Failed to prepare writable paths: %v\n", err)
+			os.Exit(1)
+		}
 	}
 
 	config, err := rest.InClusterConfig()
@@ -174,4 +184,47 @@ func isJobFailed(job *batchv1.Job) bool {
 		}
 	}
 	return false
+}
+
+// prepareWritablePaths ensures bind-mounted paths are writable by non-root workloads.
+// This mirrors common docker-compose behavior where bind targets are writable by app users.
+func prepareWritablePaths(paths []string) error {
+	for _, rawPath := range paths {
+		if rawPath == "" {
+			continue
+		}
+		path := filepath.Clean(rawPath)
+		if !filepath.IsAbs(path) {
+			return fmt.Errorf("path must be absolute: %q", rawPath)
+		}
+		if path == "/" {
+			return fmt.Errorf("refusing unsafe chmod on root path")
+		}
+
+		info, err := os.Stat(path)
+		if err != nil {
+			if os.IsNotExist(err) {
+				if err := os.MkdirAll(path, 0777); err != nil {
+					return fmt.Errorf("create directory %s: %w", path, err)
+				}
+				if err := os.Chmod(path, 0777); err != nil {
+					return fmt.Errorf("chmod directory %s: %w", path, err)
+				}
+				continue
+			}
+			return fmt.Errorf("stat %s: %w", path, err)
+		}
+
+		if info.IsDir() {
+			if err := os.Chmod(path, 0777); err != nil {
+				return fmt.Errorf("chmod directory %s: %w", path, err)
+			}
+			continue
+		}
+
+		if err := os.Chmod(path, 0666); err != nil {
+			return fmt.Errorf("chmod file %s: %w", path, err)
+		}
+	}
+	return nil
 }

@@ -378,6 +378,76 @@ func TestInitContainerServiceHealthy(t *testing.T) {
 	})
 }
 
+func TestInitContainerWritableBindMounts(t *testing.T) {
+	transformer := &Transformer{workingDir: "/tmp"}
+
+	t.Run("writable bind mount generates init container", func(t *testing.T) {
+		svc := ServiceSpec{
+			Image: "app:latest",
+			Volumes: []VolumeMount{
+				{Source: "/host/data", Target: "/data", Type: "bind"},
+			},
+		}
+
+		initSpec := transformer.buildInitContainerSpec("test", svc, nil)
+		if initSpec == "" {
+			t.Fatal("writable bind mount should generate init container")
+		}
+		if !strings.Contains(initSpec, `"prepareWritablePaths":["/data"]`) {
+			t.Error("init spec should include prepareWritablePaths with /data")
+		}
+		if !strings.Contains(initSpec, "runAsUser: 0") {
+			t.Error("writable bind mount init should run as root")
+		}
+		if !strings.Contains(initSpec, "volumeMounts:") {
+			t.Error("init spec should include volume mounts")
+		}
+		if !strings.Contains(initSpec, "mountPath: \"/data\"") {
+			t.Error("init spec should mount the bind target path")
+		}
+	})
+
+	t.Run("read-only bind mount does not generate init when no dependencies", func(t *testing.T) {
+		svc := ServiceSpec{
+			Image: "app:latest",
+			Volumes: []VolumeMount{
+				{Source: "/host/data", Target: "/data", Type: "bind", ReadOnly: true},
+			},
+		}
+
+		initSpec := transformer.buildInitContainerSpec("test", svc, nil)
+		if initSpec != "" {
+			t.Error("read-only bind mount should not generate init container by itself")
+		}
+	})
+
+	t.Run("dependencies and writable paths are both included", func(t *testing.T) {
+		allServices := map[string]ServiceSpec{
+			"migrate": {Image: "migrate:latest", IsJob: true},
+		}
+		svc := ServiceSpec{
+			Image: "app:latest",
+			Volumes: []VolumeMount{
+				{Source: "/host/data", Target: "/data", Type: "bind"},
+			},
+			DependsOn: []DependsOnSpec{
+				{Service: "migrate", Condition: "service_completed_successfully"},
+			},
+		}
+
+		initSpec := transformer.buildInitContainerSpec("test", svc, allServices)
+		if initSpec == "" {
+			t.Fatal("combined dependency + writable bind should generate init container")
+		}
+		if !strings.Contains(initSpec, `"waitForJobs":["migrate"]`) {
+			t.Error("init spec should include waitForJobs")
+		}
+		if !strings.Contains(initSpec, `"prepareWritablePaths":["/data"]`) {
+			t.Error("init spec should include prepareWritablePaths")
+		}
+	})
+}
+
 func TestRBACGenerationForDependencies(t *testing.T) {
 	transformer := &Transformer{workingDir: "/tmp"}
 
