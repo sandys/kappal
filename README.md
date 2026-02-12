@@ -39,6 +39,8 @@ kappal down                     # Stop services
 - **Healthchecks** - Compose `healthcheck` maps to K8s readiness probes automatically
 - **One-Shot Services** - `restart: "no"` runs as K8s Jobs (migrations, seeds, etc.)
 - **Profiles** - Services with `profiles` excluded from default `up`
+- **Compatibility Checks on `up`** - `kappal up` analyzes common Compose/K8s mismatch risks and prints actionable notes before deploy
+- **Writable Bind-Mount Prep** - For writable bind mounts, Kappal injects init preparation so non-root workloads can write without compose-side chmod hacks
 - **Global Cleanup** - `kappal clean --all` removes all kappal resources system-wide
 - **Worktree-Safe Naming** - Each directory gets a unique project name (hash-based), so git worktrees or copies with the same basename don't collide
 - **Label-Based Discovery** - K3s containers and networks are stamped with `kappal.io/project` labels, so commands find infrastructure reliably regardless of naming conventions
@@ -184,7 +186,7 @@ kappal down -v
 |---------|--------|---------|
 | Services | ✅ | `services.web.image: nginx` |
 | Ports | ✅ | `ports: ["8080:80"]` |
-| Volumes (named) | ✅ | `volumes: [data:/var/lib/data]` |
+| Volumes (named + bind) | ✅ | `volumes: [data:/var/lib/data, ./cache:/app/cache]` |
 | Environment | ✅ | `environment: [KEY=value]` |
 | Secrets | ✅ | `secrets: [my_secret]` |
 | Configs | ✅ | `configs: [app_config]` |
@@ -202,6 +204,12 @@ kappal down -v
 | Profiles | ✅ | `profiles: [debug]` excluded from default `up` |
 
 **Note:** Duplicate container port/protocol across services (e.g. two services both exposing `80/tcp`) is rejected with an error.
+
+**Compatibility mode notes:**
+
+- `kappal up` prints `Compatibility check: ...` findings before deployment so third-party compose stacks can be debugged without patching files first.
+- Writable bind mounts automatically trigger init-time permission prep for mount targets.
+- Use `kappal inspect` as the single source of runtime truth (ports, pods, replicas, K3s status) when troubleshooting.
 
 ## Examples
 
@@ -330,6 +338,9 @@ make conformance
 
 # Run all lints
 make lint-all
+
+# Run compatibility guardrail lint only
+make lint-compat
 ```
 
 ### Conformance Tests

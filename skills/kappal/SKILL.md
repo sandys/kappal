@@ -103,6 +103,14 @@ docker run --rm \
 
 When the user says "make this run in kappal", "deploy this with kappal", or similar:
 
+### Drop-in replacement policy (mandatory)
+
+- Treat the existing `docker-compose` file and env files as the source of truth.
+- Start with the command equivalent of what the user would run in Docker Compose (`up -d`, `up --build -d`, etc.).
+- Do **not** rewrite the compose file, add kappal-specific services, or port shell scripts into compose unless the user explicitly asks for that transformation.
+- Treat `kappal up` compatibility findings (`Compatibility check: ...`) as first-class diagnostics and report them before suggesting any compose edits.
+- If deployment fails, debug with `kappal inspect`, `kappal ps`, `kappal logs`, and `kappal exec` first; propose compose edits only when the same stack is not runnable as written.
+
 ### Step 1: Find the compose file
 
 Search for `docker-compose.yml`, `docker-compose.yaml`, `compose.yml`, `compose.yaml` in:
@@ -117,6 +125,7 @@ Parse it for:
 - **`env_file:` references** — verify these files exist at the expected paths relative to the compose file
 - **Port mappings** — note which ports will be exposed
 - **Named volumes** — note persistent data
+- **Writable bind mounts** — note bind mounts without `read_only`; kappal auto-enables init-time permission prep for these
 - **`deploy.replicas`** — note scaling configuration
 - **`restart: "no"`** — these services will run as one-shot Jobs (migrations, seeds, etc.)
 - **`depends_on` with conditions** — note any `service_completed_successfully` (Jobs) and `service_healthy` (healthcheck-based) dependencies
@@ -321,7 +330,7 @@ curl http://localhost:$PORT/health
 
 ### Fully Supported
 
-services, image, build (context + dockerfile + args), ports (TCP/UDP), volumes (named), environment, env_file, secrets, configs, networks, command, entrypoint, deploy.replicas, labels, restart, depends_on (including `service_completed_successfully` and `service_healthy`), healthchecks (mapped to K8s readiness probes), profiles, one-shot services (Jobs)
+services, image, build (context + dockerfile + args), ports (TCP/UDP), volumes (named + bind), environment, env_file, secrets, configs, networks, command, entrypoint, deploy.replicas, labels, restart, depends_on (including `service_completed_successfully` and `service_healthy`), healthchecks (mapped to K8s readiness probes), profiles, one-shot services (Jobs)
 
 ### Key Behaviors
 
@@ -329,6 +338,8 @@ services, image, build (context + dockerfile + args), ports (TCP/UDP), volumes (
 - **`depends_on` with `condition: service_completed_successfully`** — Kappal injects an init container that waits for the dependency Job to complete before starting the dependent service. This works for both Job-to-Job and Job-to-Deployment dependencies.
 - **`depends_on` with `condition: service_healthy`** — Kappal injects an init container that waits for the dependency's pod to reach `Ready` status (healthcheck passing). The dependency service must define a `healthcheck`.
 - **`healthcheck`** — Compose healthcheck definitions are translated to K8s readiness probes (exec-based). Both `CMD-SHELL` and `CMD` formats are supported. `interval`, `timeout`, `retries`, and `start_period` map to K8s probe parameters.
+- **Compatibility checker on `up`** — Kappal analyzes active services before deploy and prints `Compatibility check: ...` notes for high-signal Compose/K8s mismatch risks.
+- **Writable bind mounts** — For writable bind mounts, Kappal injects init-time path preparation so non-root workloads can write without compose-side chmod helper services.
 - **Failed Job pods** — When K8s retries a failed Job, old failed pods don't block readiness. Only the latest attempt's status matters.
 - **Detach mode timeout** — When `-d` is used, readiness timeout is a warning (exit 0), not a fatal error. Use `--timeout <seconds>` to adjust for complex stacks with sequential job chains.
 - **`profiles`** — Services with `profiles:` are excluded from `kappal up` by default, matching Docker Compose behavior. Profile activation is not yet supported.
@@ -378,3 +389,5 @@ Override with `-p <name>` when you need a fixed name (e.g. scripting, CI).
 6. **`KAPPAL_HOST_DIR` env var** — Required when running kappal via `docker run`. It tells kappal the real host path of the project directory so the project name is derived from the host path (not the container's `/project`). Without it, all projects would get the same name. Always include `-e KAPPAL_HOST_DIR="<project-root>"` in docker run commands. **Important:** `KAPPAL_HOST_DIR` should be a resolved (non-symlinked) path. Symlink resolution only works when kappal runs directly on the host; inside Docker, the caller must pass the canonical path.
 
 7. **Duplicate port/protocol** — If a compose file maps the same container port and protocol twice (e.g. two services both expose `80/tcp`), kappal will return an error instead of silently overwriting.
+
+8. **Premature compose patching** — For third-party projects, do not edit compose files before trying the drop-in path. Run `up`, capture compatibility notes, and inspect runtime state first.
