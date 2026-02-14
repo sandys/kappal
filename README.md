@@ -317,7 +317,7 @@ docker-compose.yaml
 1. **Users never see Kubernetes** - All K8s concepts are hidden behind Compose semantics
 2. **Self-contained** - K3s runs in Docker, no system installation needed
 3. **Persistent by default** - Volumes survive `down`/`up` cycles (use `-v` to remove)
-4. **Standard tools** - Uses compose-go (official parser), K3s, client-go
+4. **Standard tools** - Uses compose-go (official parser), K3s, kubectl, client-go
 5. **Label-based discovery** - Infrastructure is found via Docker labels, not naming conventions
 
 ## Development

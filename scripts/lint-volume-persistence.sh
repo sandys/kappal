@@ -5,7 +5,7 @@
 # Only `kappal down -v` should delete volumes
 #
 # This means:
-# 1. tanka.Delete should NOT delete the namespace by default (namespace deletion cascades to PVCs)
+# 1. kubectl.Delete should NOT delete the namespace by default (namespace deletion cascades to PVCs)
 # 2. Only when DeleteVolumes=true should the namespace be deleted
 # 3. K3s data volume should persist across down/up cycles
 #
@@ -16,13 +16,13 @@ echo "Checking for volume persistence patterns..."
 ERRORS=0
 
 # =============================================================================
-# Check 1: tanka.Delete should preserve namespace by default
+# Check 1: kubectl.Delete should preserve namespace by default
 # =============================================================================
 
-check_tanka_delete() {
-    local apply_file="pkg/tanka/apply.go"
+check_kubectl_delete() {
+    local apply_file="pkg/kubectl/apply.go"
     if [ ! -f "$apply_file" ]; then
-        echo "WARNING: pkg/tanka/apply.go not found"
+        echo "WARNING: pkg/kubectl/apply.go not found"
         return 0
     fi
 
@@ -32,7 +32,7 @@ check_tanka_delete() {
 
     # Check for DeleteVolumes option
     if ! grep -q 'DeleteVolumes' "$apply_file"; then
-        echo "ERROR: DeleteVolumes option not found in tanka/apply.go"
+        echo "ERROR: DeleteVolumes option not found in kubectl/apply.go"
         echo "  The Delete function should accept DeleteVolumes to control namespace deletion"
         return 1
     fi
@@ -54,7 +54,7 @@ check_tanka_delete() {
     return 0
 }
 
-if ! check_tanka_delete; then
+if ! check_kubectl_delete; then
     ERRORS=$((ERRORS + 1))
 fi
 
@@ -76,7 +76,7 @@ check_down_command() {
         return 1
     fi
 
-    # Check that DeleteVolumes is passed to tanka.Delete
+    # Check that DeleteVolumes is passed to kubectl.Delete
     if ! grep -q 'DeleteVolumes' "$down_file"; then
         echo "ERROR: DeleteVolumes not passed to Delete in down.go"
         echo "  The down command should pass DeleteVolumes based on --volumes flag"

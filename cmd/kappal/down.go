@@ -9,7 +9,7 @@ import (
 	"github.com/kappal-app/kappal/pkg/compose"
 	"github.com/kappal-app/kappal/pkg/k3s"
 	"github.com/kappal-app/kappal/pkg/state"
-	"github.com/kappal-app/kappal/pkg/tanka"
+	"github.com/kappal-app/kappal/pkg/kubectl"
 	"github.com/kappal-app/kappal/pkg/workspace"
 	"github.com/spf13/cobra"
 )
@@ -65,10 +65,10 @@ func runDown(cmd *cobra.Command, args []string) error {
 		return fmt.Errorf("failed to discover state: %w", err)
 	}
 
-	// Delete resources via Tanka if kubeconfig available
-	// Continue cleanup even if tanka delete fails (e.g. stale kubeconfig, K3s unreachable)
+	// Delete resources via kubectl if kubeconfig available
+	// Continue cleanup even if kubectl delete fails (e.g. stale kubeconfig, K3s unreachable)
 	if discovered.Kubeconfig != "" {
-		if err := tanka.Delete(ctx, project.Name, discovered.Kubeconfig, tanka.DeleteOpts{
+		if err := kubectl.Delete(ctx, project.Name, discovered.Kubeconfig, kubectl.DeleteOpts{
 			AutoApprove:   true,
 			DeleteVolumes: downVolumes,
 		}); err != nil {

@@ -1,4 +1,4 @@
-package tanka
+package kubectl
 
 import (
 	"context"
@@ -27,9 +27,7 @@ type DeleteOpts struct {
 type DiffOpts struct {
 }
 
-// Apply applies the workspace manifests using Tanka
-// Note: For now, we use kubectl apply as Tanka library requires complex setup.
-// This will be replaced with tanka.Apply() once we integrate the full Tanka library.
+// Apply applies the workspace manifests using kubectl
 func Apply(ctx context.Context, ws *workspace.Workspace, kubeconfigPath string, opts ApplyOpts) error {
 	manifestPath := filepath.Join(ws.GetManifestDir(), "all.yaml")
 

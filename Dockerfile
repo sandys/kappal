@@ -1,6 +1,6 @@
 # Multi-stage Dockerfile for Kappal
 # Stage 1: Build
-FROM golang:1.22-bookworm AS builder
+FROM golang:1.22.12-bookworm AS builder
 
 WORKDIR /workspace
 
@@ -14,7 +14,7 @@ RUN go mod tidy && CGO_ENABLED=0 go build -ldflags="-s -w" -o /kappal ./cmd/kapp
     CGO_ENABLED=0 go build -ldflags="-s -w" -o /kappal-init ./cmd/kappal-init
 
 # Stage 2: Runtime (with Docker CLI for K3s management)
-FROM docker:24-cli
+FROM docker:24.0.9-cli
 
 # Install required tools including kubectl
 RUN apk add --no-cache \

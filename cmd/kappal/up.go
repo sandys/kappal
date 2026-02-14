@@ -13,7 +13,7 @@ import (
 	"github.com/kappal-app/kappal/pkg/k3s"
 	"github.com/kappal-app/kappal/pkg/k8s"
 	"github.com/kappal-app/kappal/pkg/state"
-	"github.com/kappal-app/kappal/pkg/tanka"
+	"github.com/kappal-app/kappal/pkg/kubectl"
 	"github.com/kappal-app/kappal/pkg/transform"
 	"github.com/kappal-app/kappal/pkg/workspace"
 	"github.com/spf13/cobra"
@@ -31,7 +31,7 @@ var upCmd = &cobra.Command{
 	Long: `Create and start containers defined in the Compose file.
 
 Parses docker-compose.yaml, generates Kubernetes manifests, ensures a K3s instance
-is running for this project, and applies the manifests via Tanka. Waits up to 5
+is running for this project, and applies the manifests via kubectl. Waits up to 5
 minutes for all pods to become ready before returning.
 
 Services with "restart: no" run as one-shot Kubernetes Jobs. Services with
@@ -187,8 +187,8 @@ func runUp(cmd *cobra.Command, args []string) error {
 		_ = k8sClient.DeleteJobs(deleteCtx, project.Name)
 	}
 
-	// Apply manifests via Tanka/kubectl (uses kubeconfig, NOT docker exec)
-	if err := tanka.Apply(ctx, ws, kubeconfigPath, tanka.ApplyOpts{AutoApprove: true}); err != nil {
+	// Apply manifests via kubectl (uses kubeconfig, NOT docker exec)
+	if err := kubectl.Apply(ctx, ws, kubeconfigPath, kubectl.ApplyOpts{AutoApprove: true}); err != nil {
 		return fmt.Errorf("failed to apply: %w", err)
 	}
 
