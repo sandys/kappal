@@ -322,12 +322,17 @@ func (m *Manager) start(ctx context.Context) error {
 			"server",
 			"--disable=traefik",
 			"--disable=metrics-server",
+			"--flannel-backend=host-gw",
+			"--kube-apiserver-arg=watch-cache=false",
+			"--kube-controller-manager-arg=terminated-pod-gc-threshold=10",
+			"--etcd-disable-snapshots",
 			"--bind-address=0.0.0.0",
 			"--tls-san=0.0.0.0",
 			"--tls-san=127.0.0.1",
 		},
 		Env: []string{
 			"K3S_KUBECONFIG_MODE=644",
+			"GOMEMLIMIT=500MiB",
 		},
 		ExposedPorts: exposedPorts,
 		Labels: map[string]string{

@@ -44,6 +44,7 @@ kappal down                     # Stop services
 - **Global Cleanup** - `kappal clean --all` removes all kappal resources system-wide
 - **Worktree-Safe Naming** - Each directory gets a unique project name (hash-based), so git worktrees or copies with the same basename don't collide
 - **Label-Based Discovery** - K3s containers and networks are stamped with `kappal.io/project` labels, so commands find infrastructure reliably regardless of naming conventions
+- **Resource-Optimized K3s** - Disables unused K3s components, uses host-gw networking, disables API server watch cache, and tunes Go GC (`GOMEMLIMIT`) to minimize memory footprint
 - **Verbose Conformance Tests** - `make conformance` shows timestamped command output, per-test timing, and full diagnostic dumps (K3s logs, pod events, container state) on any failure
 
 ## Dependency Ordering & One-Shot Services
